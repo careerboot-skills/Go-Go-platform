@@ -7,7 +7,9 @@ const mongoose = require('mongoose');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  maxHttpBufferSize: 1e7 // 10MB limit for base64 document uploads
+  maxHttpBufferSize: 1e7,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 app.use(express.json({ limit: '15mb' }));
@@ -69,7 +71,7 @@ const Ride = mongoose.model('Ride', rideSchema);
 // REAL-TIME SEQUENTIAL DISPATCH ENGINE
 // ==========================================
 const activeDispatches = new Map();
-const connectedRiders = new Map();
+const connectedRiders = new Map(); // riderId -> socketId
 
 async function dispatchNextRider(rideId) {
   try {
@@ -79,14 +81,15 @@ async function dispatchNextRider(rideId) {
       return;
     }
 
+    // Fetch ALL approved & online riders in First-Joined-First-Served order
     const eligibleRiders = await Rider.find({ status: 'approved', isOnline: true }).sort({ joinedAt: 1 });
 
     if (eligibleRiders.length === 0) {
       io.to(`ride_${rideId}`).emit('ride_status_update', {
         status: 'searching',
-        message: 'No verified riders online right now. Retrying in 10 seconds...'
+        message: 'No verified riders online right now. Retrying in 8 seconds...'
       });
-      const retryTimer = setTimeout(() => dispatchNextRider(rideId), 10000);
+      const retryTimer = setTimeout(() => dispatchNextRider(rideId), 8000);
       activeDispatches.set(rideId, { timer: retryTimer, currentIndex: 0 });
       return;
     }
@@ -97,28 +100,34 @@ async function dispatchNextRider(rideId) {
     }
 
     const targetRider = eligibleRiders[state.currentIndex];
-    const targetSocketId = connectedRiders.get(targetRider._id.toString());
+    const targetRiderIdStr = targetRider._id.toString();
+    const targetSocketId = connectedRiders.get(targetRiderIdStr);
 
     io.to(`ride_${rideId}`).emit('ride_status_update', {
       status: 'searching',
       message: `Ringing Rider #${state.currentIndex + 1} (${targetRider.name}) in queue...`
     });
 
+    const ringPayload = {
+      rideId: ride._id,
+      pickupAddress: ride.pickupAddress,
+      pickupCoords: ride.pickupCoords,
+      dropAddress: ride.dropAddress,
+      dropCoords: ride.dropCoords,
+      distanceKm: ride.distanceKm,
+      fare: ride.fare,
+      timeoutSec: 20
+    };
+
+    // Emit to BOTH personal rider room and direct socketId for 100% delivery reliability
+    io.to(`rider_${targetRiderIdStr}`).emit('incoming_ride_ring', ringPayload);
     if (targetSocketId) {
-      io.to(targetSocketId).emit('incoming_ride_ring', {
-        rideId: ride._id,
-        pickupAddress: ride.pickupAddress,
-        pickupCoords: ride.pickupCoords,
-        dropAddress: ride.dropAddress,
-        dropCoords: ride.dropCoords,
-        distanceKm: ride.distanceKm,
-        fare: ride.fare,
-        timeoutSec: 20
-      });
+      io.to(targetSocketId).emit('incoming_ride_ring', ringPayload);
     }
 
     const nextIndex = (state.currentIndex + 1) % eligibleRiders.length;
     const timer = setTimeout(() => {
+      io.to(`rider_${targetRiderIdStr}`).emit('ring_timeout', { rideId: ride._id });
       if (targetSocketId) {
         io.to(targetSocketId).emit('ring_timeout', { rideId: ride._id });
       }
@@ -143,9 +152,17 @@ function clearDispatch(rideId) {
 io.on('connection', (socket) => {
   socket.on('register_rider_socket', async (riderId) => {
     if (!riderId) return;
-    connectedRiders.set(riderId, socket.id);
-    socket.riderId = riderId;
-    await Rider.findByIdAndUpdate(riderId, { isOnline: true });
+    const idStr = riderId.toString();
+    connectedRiders.set(idStr, socket.id);
+    socket.riderId = idStr;
+    socket.join(`rider_${idStr}`); // Dedicated room per rider survives reconnects
+    await Rider.findByIdAndUpdate(idStr, { isOnline: true });
+
+    // Check if there is currently an active searching ride that should ring immediately
+    const activeRide = await Ride.findOne({ status: 'searching' }).sort({ createdAt: 1 });
+    if (activeRide && !activeDispatches.has(activeRide._id.toString())) {
+      dispatchNextRider(activeRide._id.toString());
+    }
   });
 
   socket.on('join_ride_room', (rideId) => {
@@ -213,7 +230,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (socket.riderId) {
+    if (socket.riderId && connectedRiders.get(socket.riderId) === socket.id) {
       connectedRiders.delete(socket.riderId);
     }
   });
@@ -279,6 +296,20 @@ app.post('/api/rider/toggle-online', async (req, res) => {
   }
 });
 
+// Fallback polling endpoint in case a mobile browser temporarily throttles WebSockets
+app.get('/api/rider/check-pending-ride/:riderId', async (req, res) => {
+  try {
+    const rider = await Rider.findById(req.params.riderId);
+    if (!rider || rider.status !== 'approved' || !rider.isOnline) {
+      return res.json({ ride: null });
+    }
+    const searchingRide = await Ride.findOne({ status: 'searching' }).sort({ createdAt: 1 });
+    res.json({ ride: searchingRide || null });
+  } catch (err) {
+    res.json({ ride: null });
+  }
+});
+
 app.post('/api/customer/auth', async (req, res) => {
   try {
     const { mode, name, mobile, aadhaarImage } = req.body;
@@ -315,6 +346,9 @@ app.post('/api/rides/book', async (req, res) => {
       return res.status(400).json({ error: 'Please select valid Pickup and Drop locations on the map.' });
     }
 
+    // Recalculate strictly at ₹5/km on server side for security
+    const verifiedFare = Math.max(5, Math.round(parseFloat(distanceKm) * 5));
+
     const ride = await Ride.create({
       customerName,
       customerMobile,
@@ -323,7 +357,7 @@ app.post('/api/rides/book', async (req, res) => {
       dropAddress,
       dropCoords,
       distanceKm,
-      fare,
+      fare: verifiedFare,
       status: 'searching'
     });
 
@@ -349,10 +383,7 @@ app.post('/api/admin/verify-rider', async (req, res) => {
   if (password !== ADMIN_PASS) return res.status(401).json({ error: 'Unauthorized' });
 
   const rider = await Rider.findByIdAndUpdate(riderId, { status }, { new: true });
-  const sockId = connectedRiders.get(riderId);
-  if (sockId) {
-    io.to(sockId).emit('verification_status_changed', { status });
-  }
+  io.to(`rider_${riderId}`).emit('verification_status_changed', { status });
 
   res.json({ rider });
 });
@@ -366,7 +397,7 @@ app.get('*', (req, res) => {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Go²Go | Zero Commission Rides • ₹12/km</title>
+  <title>Go²Go | Zero Commission Rides • ₹5/km</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -464,7 +495,7 @@ app.get('*', (req, res) => {
     </div>
     <div class="flex items-center gap-3">
       <span class="hidden sm:inline-block text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-        ₹12/km Flat • 0% Commission
+        ₹5/km Flat • 0% Commission
       </span>
       <button onclick="showView('admin')" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-slate-800 hover:border-slate-600 transition">
         Admin Panel
@@ -486,7 +517,7 @@ app.get('*', (req, res) => {
         Zero Commission for Riders. Pocket-Friendly for You.
       </p>
       <p class="text-slate-400 mt-3 max-w-xl text-sm sm:text-base">
-        Transparent <strong class="text-white">₹12/km</strong> distance pricing. 100% of the fare goes straight to the Rider with zero hidden charges.
+        Transparent <strong class="text-white">₹5/km</strong> distance pricing. 100% of the fare goes straight to the Rider with zero hidden charges.
       </p>
     </div>
 
@@ -511,7 +542,7 @@ app.get('*', (req, res) => {
             <path stroke-linecap="round" stroke-linejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
           </svg>
         </div>
-        <div class="text-xs uppercase tracking-widest font-bold text-blue-100 mb-1">Flat ₹12/km • No Surges</div>
+        <div class="text-xs uppercase tracking-widest font-bold text-blue-100 mb-1">Flat ₹5/km • No Surges</div>
         <h2 class="text-3xl font-black text-white">2. I'm Customer</h2>
         <p class="text-blue-100/90 text-sm mt-2">Pin pickup & drop on live map and get matched with verified riders.</p>
       </div>
@@ -596,27 +627,37 @@ app.get('*', (req, res) => {
           Pending Verification
         </div>
       </div>
+
       <div id="rd-pending-box" class="mt-6 bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 text-center">
         <h3 class="text-lg font-bold text-amber-300">Verification Request Submitted</h3>
         <p class="text-sm text-slate-300 mt-1">Admin has been notified to review your Aadhaar & Vehicle details. Once approved, you will automatically enter the First-Joined-First-Served ride queue.</p>
       </div>
+
       <div id="rd-active-box" class="hidden mt-6 space-y-5">
-        <div class="flex items-center justify-between bg-slate-900/90 p-4 rounded-2xl border border-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 p-4 rounded-2xl border border-slate-800">
           <div>
             <p class="text-xs text-slate-400 uppercase font-bold">Queue Sequence Priority</p>
             <p class="text-lg font-black text-emerald-400">Sequence #<span id="rd-seq">1</span> (First-Joined Priority)</p>
           </div>
-          <button id="rd-online-btn" onclick="toggleRiderOnline()" class="px-4 py-2 rounded-xl font-bold text-xs bg-emerald-500 text-slate-950">
-            ● ONLINE
-          </button>
+          <div class="flex items-center gap-2">
+            <button onclick="unlockAndTestSound()" class="px-3 py-2 rounded-xl font-bold text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30">
+              🔊 Enable & Test Ringtone
+            </button>
+            <button id="rd-online-btn" onclick="toggleRiderOnline()" class="px-4 py-2 rounded-xl font-bold text-xs bg-emerald-500 text-slate-950">
+              ● ONLINE
+            </button>
+          </div>
         </div>
+
         <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-center">
-          <div class="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3 animate-pulse">
-            📡
+          <div class="flex justify-center items-center gap-2 text-xs text-emerald-400 font-bold mb-2">
+            <span id="socket-status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+            <span id="socket-status-text">Live Dispatch Connected</span>
           </div>
           <p class="font-bold text-white">Listening for Customer Rides...</p>
-          <p class="text-xs text-slate-400 mt-1">Keep this browser tab open. You will get a loud 20-second alarm ring when it's your turn.</p>
+          <p class="text-xs text-slate-400 mt-1">Tap <strong>"Enable & Test Ringtone"</strong> once so your phone browser permits loud alarm alerts when a ride arrives.</p>
         </div>
+
         <div id="rd-accepted-card" class="hidden bg-emerald-950/60 border-2 border-emerald-400 rounded-2xl p-5 space-y-3">
           <div class="flex justify-between items-center">
             <span class="text-xs font-black uppercase tracking-wider text-emerald-400">Active Ride Confirmed</span>
@@ -700,7 +741,7 @@ app.get('*', (req, res) => {
       <div class="flex flex-wrap justify-between items-center gap-2">
         <div>
           <h2 class="text-xl font-black text-white">Book Pickup & Drop</h2>
-          <p class="text-xs text-slate-400">Welcome, <span id="cb-username" class="text-blue-400 font-bold"></span> • Flat ₹12/km (Zero Hidden Fees)</p>
+          <p class="text-xs text-slate-400">Welcome, <span id="cb-username" class="text-blue-400 font-bold"></span> • Flat ₹5/km (Zero Hidden Fees)</p>
         </div>
         <button onclick="useCurrentGPS()" class="px-3 py-2 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/30">
           📍 Use My Current GPS
@@ -740,7 +781,7 @@ app.get('*', (req, res) => {
           </div>
           <div class="h-8 w-px bg-slate-800"></div>
           <div>
-            <span class="text-xs text-slate-400 block">Total Fare (₹12/km)</span>
+            <span class="text-xs text-slate-400 block">Total Fare (₹5/km)</span>
             <span id="calc-fare" class="text-2xl font-black text-emerald-400">₹0</span>
           </div>
         </div>
@@ -800,15 +841,17 @@ app.get('*', (req, res) => {
   </section>
 
   <script>
-    const socket = io();
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000 });
     let currentRider = null;
     let currentCustomer = null;
     let activeRideId = null;
     let incomingRingRideId = null;
     let ringCountdownInterval = null;
     let ringAudioInterval = null;
+    let riderPollInterval = null;
     let riderAuthMode = 'register';
     let custAuthMode = 'register';
+    let sharedAudioCtx = null;
 
     let map, pickupMarker, dropMarker, routeLine;
     let pickupCoords = null;
@@ -816,6 +859,27 @@ app.get('*', (req, res) => {
     let currentDistanceKm = 0;
     let currentFare = 0;
     let searchTimeout = null;
+
+    // Automatically re-register rider socket after any network drop or mobile tab sleep
+    socket.on('connect', () => {
+      const dot = document.getElementById('socket-status-dot');
+      const txt = document.getElementById('socket-status-text');
+      if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping';
+      if (txt) txt.innerText = 'Live Dispatch Connected';
+      if (currentRider && currentRider._id) {
+        socket.emit('register_rider_socket', currentRider._id);
+      }
+      if (activeRideId) {
+        socket.emit('join_ride_room', activeRideId);
+      }
+    });
+
+    socket.on('disconnect', () => {
+      const dot = document.getElementById('socket-status-dot');
+      const txt = document.getElementById('socket-status-text');
+      if (dot) dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+      if (txt) txt.innerText = 'Reconnecting to Dispatch...';
+    });
 
     function tilt4D(e, el) {
       const rect = el.getBoundingClientRect();
@@ -858,38 +922,51 @@ app.get('*', (req, res) => {
       });
     }
 
-    // LOUD SIREN BEEP GENERATOR FOR RIDERS
+    // UNLOCK AUDIO & NOTIFICATION PERMISSIONS ON MOBILE
+    function unlockAndTestSound() {
+      if ('Notification' in window && Notification.permission !== 'granted') {
+        Notification.requestPermission();
+      }
+      playLoudSiren();
+    }
+
+    // LOUD SIREN + PHONE VIBRATION GENERATOR
     function playLoudSiren() {
       try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        if (ctx.state === 'suspended') ctx.resume();
-        const now = ctx.currentTime;
-        
-        // Dual oscillator loud alternating alarm tone
-        const osc1 = ctx.createOscillator();
-        const osc2 = ctx.createOscillator();
-        const gain = ctx.createGain();
+        if (navigator.vibrate) {
+          navigator.vibrate([500, 200, 500, 200, 500]);
+        }
+        if (!sharedAudioCtx) {
+          sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (sharedAudioCtx.state === 'suspended') {
+          sharedAudioCtx.resume();
+        }
+        const now = sharedAudioCtx.currentTime;
+        const osc1 = sharedAudioCtx.createOscillator();
+        const osc2 = sharedAudioCtx.createOscillator();
+        const gain = sharedAudioCtx.createGain();
 
         osc1.type = 'sawtooth';
         osc2.type = 'square';
 
-        osc1.frequency.setValueAtTime(800, now);
-        osc1.frequency.linearRampToValueAtTime(1200, now + 0.4);
+        osc1.frequency.setValueAtTime(880, now);
+        osc1.frequency.linearRampToValueAtTime(1320, now + 0.45);
 
-        osc2.frequency.setValueAtTime(600, now);
-        osc2.frequency.linearRampToValueAtTime(900, now + 0.4);
+        osc2.frequency.setValueAtTime(660, now);
+        osc2.frequency.linearRampToValueAtTime(990, now + 0.45);
 
-        gain.gain.setValueAtTime(0.5, now); // High volume gain
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+        gain.gain.setValueAtTime(0.8, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.9);
 
         osc1.connect(gain);
         osc2.connect(gain);
-        gain.connect(ctx.destination);
+        gain.connect(sharedAudioCtx.destination);
 
         osc1.start(now);
         osc2.start(now);
-        osc1.stop(now + 0.8);
-        osc2.stop(now + 0.8);
+        osc1.stop(now + 0.9);
+        osc2.stop(now + 0.9);
       } catch (e) {}
     }
 
@@ -906,6 +983,13 @@ app.get('*', (req, res) => {
 
     async function handleRiderSubmit(e) {
       e.preventDefault();
+      // Unlock audio context immediately on user form tap
+      try {
+        if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
+        if ('Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
+      } catch (err) {}
+
       const btn = document.getElementById('rider-submit-btn');
       btn.disabled = true;
       btn.innerText = 'Processing...';
@@ -935,6 +1019,7 @@ app.get('*', (req, res) => {
       document.getElementById('rd-vehicle').innerText = \`\${currentRider.vehicleType} • \${currentRider.vehicleModel} (\${currentRider.vehicleNumber})\`;
       if (currentRider.profileImage) document.getElementById('rd-avatar').src = currentRider.profileImage;
       socket.emit('register_rider_socket', currentRider._id);
+
       const badge = document.getElementById('rd-badge');
       if (currentRider.status === 'approved') {
         badge.innerText = '✓ Verified Rider';
@@ -942,10 +1027,21 @@ app.get('*', (req, res) => {
         document.getElementById('rd-pending-box').classList.add('hidden');
         document.getElementById('rd-active-box').classList.remove('hidden');
         document.getElementById('rd-seq').innerText = queuePos || 1;
+        startRiderHeartbeat();
       } else if (currentRider.status === 'rejected') {
         badge.innerText = '✕ Rejected';
         badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-red-500/20 text-red-300 border border-red-500/30';
       }
+    }
+
+    // Keeps socket registration fresh every 10 seconds while rider is active
+    function startRiderHeartbeat() {
+      clearInterval(riderPollInterval);
+      riderPollInterval = setInterval(() => {
+        if (currentRider && currentRider._id && currentRider.isOnline) {
+          socket.emit('register_rider_socket', currentRider._id);
+        }
+      }, 10000);
     }
 
     async function toggleRiderOnline() {
@@ -953,6 +1049,7 @@ app.get('*', (req, res) => {
       const res = await fetch('/api/rider/toggle-online', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ riderId: currentRider._id, isOnline: nextState }) });
       const data = await res.json();
       currentRider = data.rider;
+      if (currentRider.isOnline) socket.emit('register_rider_socket', currentRider._id);
       const btn = document.getElementById('rd-online-btn');
       btn.innerText = currentRider.isOnline ? '● ONLINE' : '○ OFFLINE';
       btn.className = currentRider.isOnline ? 'px-4 py-2 rounded-xl font-bold text-xs bg-emerald-500 text-slate-950' : 'px-4 py-2 rounded-xl font-bold text-xs bg-slate-700 text-slate-300';
@@ -963,6 +1060,9 @@ app.get('*', (req, res) => {
     });
 
     socket.on('incoming_ride_ring', (ride) => {
+      // Prevent duplicate interval resets if both room and direct socket emit fire simultaneously
+      if (incomingRingRideId === ride.rideId) return;
+
       incomingRingRideId = ride.rideId;
       document.getElementById('ring-fare').innerText = '₹' + ride.fare;
       document.getElementById('ring-dist').innerText = \`\${ride.distanceKm} km • 100% Yours (0% Commission)\`;
@@ -970,13 +1070,18 @@ app.get('*', (req, res) => {
       document.getElementById('ring-drop').innerText = ride.dropAddress;
       document.getElementById('ring-modal').classList.remove('hidden');
 
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('🚨 Go²Go New Ride Request!', {
+          body: \`Fare: ₹\${ride.fare} (\${ride.distanceKm} km) • Tap to Accept!\`
+        });
+      }
+
       let sec = ride.timeoutSec || 20;
       document.getElementById('ring-timer').innerText = sec;
-      
-      // Play loud siren immediately and repeat every 2 seconds
+
       playLoudSiren();
       clearInterval(ringAudioInterval);
-      ringAudioInterval = setInterval(playLoudSiren, 2000);
+      ringAudioInterval = setInterval(playLoudSiren, 1800);
 
       clearInterval(ringCountdownInterval);
       ringCountdownInterval = setInterval(() => {
@@ -999,8 +1104,9 @@ app.get('*', (req, res) => {
 
     function acceptIncomingRide() {
       if (!incomingRingRideId || !currentRider) return;
+      const acceptedId = incomingRingRideId;
       stopRiderRinging();
-      socket.emit('accept_ride', { rideId: incomingRingRideId, riderId: currentRider._id });
+      socket.emit('accept_ride', { rideId: acceptedId, riderId: currentRider._id });
     }
 
     socket.on('ride_confirmed_for_rider', (details) => {
@@ -1075,7 +1181,6 @@ app.get('*', (req, res) => {
       });
     }
 
-    // INSTANT AUTOCOMPLETE SEARCH FIX
     function handleAddressInput(type) {
       clearTimeout(searchTimeout);
       const query = document.getElementById(type + '-search').value.trim();
@@ -1139,7 +1244,7 @@ app.get('*', (req, res) => {
         if (data.routes && data.routes.length > 0) {
           const route = data.routes[0];
           currentDistanceKm = parseFloat((route.distance / 1000).toFixed(2));
-          currentFare = Math.max(12, Math.round(currentDistanceKm * 12));
+          currentFare = Math.max(5, Math.round(currentDistanceKm * 5)); // ₹5/km
 
           if (routeLine) map.removeLayer(routeLine);
           const latLngs = route.geometry.coordinates.map(c => [c[1], c[0]]);
