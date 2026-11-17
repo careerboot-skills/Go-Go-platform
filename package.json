@@ -1,5 +1,5 @@
 {
-  "name": "go²go-ride-platform",
+  "name": "gogo-ride-platform",
   "version": "1.0.0",
   "description": "Zero commission pickup and drop platform with sequential rider dispatch",
   "main": "server.js",
