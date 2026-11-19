@@ -19,7 +19,7 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 // MONGODB CONNECTION & SCHEMAS
 // ==========================================
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/go2go';
-const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'G2FREE';
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log('✅ Connected to MongoDB permanently'))
@@ -60,18 +60,61 @@ const rideSchema = new mongoose.Schema({
   riderName: String,
   riderMobile: String,
   riderVehicle: String,
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  completedAt: { type: Date, default: null }
 });
 
 const Rider = mongoose.model('Rider', riderSchema);
 const Customer = mongoose.model('Customer', customerSchema);
 const Ride = mongoose.model('Ride', rideSchema);
 
+// Helper: Calculate Daily, Weekly, Monthly Stats for a Rider
+async function computeRiderStats(riderId) {
+  const now = new Date();
+
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+
+  const dayOfWeek = now.getDay(); // 0 (Sun) to 6 (Sat)
+  const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday, 0, 0, 0, 0);
+
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+
+  const completedRides = await Ride.find({
+    riderId: new mongoose.Types.ObjectId(riderId),
+    status: 'completed'
+  }).sort({ completedAt: -1, createdAt: -1 });
+
+  const summarize = (rides) => {
+    let totalRides = 0;
+    let totalKm = 0;
+    let totalEarnings = 0;
+    for (const r of rides) {
+      totalRides += 1;
+      totalKm += Number(r.distanceKm || 0);
+      totalEarnings += Number(r.fare || 0);
+    }
+    return {
+      totalRides,
+      totalKm: parseFloat(totalKm.toFixed(2)),
+      totalEarnings: Math.round(totalEarnings)
+    };
+  };
+
+  const getRideDate = (r) => new Date(r.completedAt || r.createdAt);
+
+  return {
+    daily: summarize(completedRides.filter(r => getRideDate(r) >= startOfDay)),
+    weekly: summarize(completedRides.filter(r => getRideDate(r) >= startOfWeek)),
+    monthly: summarize(completedRides.filter(r => getRideDate(r) >= startOfMonth))
+  };
+}
+
 // ==========================================
 // REAL-TIME SEQUENTIAL DISPATCH ENGINE
 // ==========================================
 const activeDispatches = new Map();
-const connectedRiders = new Map(); // riderId -> socketId
+const connectedRiders = new Map();
 
 async function dispatchNextRider(rideId) {
   try {
@@ -81,7 +124,6 @@ async function dispatchNextRider(rideId) {
       return;
     }
 
-    // Fetch ALL approved & online riders in First-Joined-First-Served order
     const eligibleRiders = await Rider.find({ status: 'approved', isOnline: true }).sort({ joinedAt: 1 });
 
     if (eligibleRiders.length === 0) {
@@ -119,7 +161,6 @@ async function dispatchNextRider(rideId) {
       timeoutSec: 20
     };
 
-    // Emit to BOTH personal rider room and direct socketId for 100% delivery reliability
     io.to(`rider_${targetRiderIdStr}`).emit('incoming_ride_ring', ringPayload);
     if (targetSocketId) {
       io.to(targetSocketId).emit('incoming_ride_ring', ringPayload);
@@ -155,10 +196,9 @@ io.on('connection', (socket) => {
     const idStr = riderId.toString();
     connectedRiders.set(idStr, socket.id);
     socket.riderId = idStr;
-    socket.join(`rider_${idStr}`); // Dedicated room per rider survives reconnects
+    socket.join(`rider_${idStr}`);
     await Rider.findByIdAndUpdate(idStr, { isOnline: true });
 
-    // Check if there is currently an active searching ride that should ring immediately
     const activeRide = await Ride.findOne({ status: 'searching' }).sort({ createdAt: 1 });
     if (activeRide && !activeDispatches.has(activeRide._id.toString())) {
       dispatchNextRider(activeRide._id.toString());
@@ -211,6 +251,7 @@ io.on('connection', (socket) => {
       });
 
       io.to(`ride_${rideId}`).emit('ride_accepted_by_rider', {
+        rideId: ride._id,
         riderName: rider.name,
         riderMobile: rider.mobile,
         riderVehicle: ride.riderVehicle,
@@ -220,6 +261,39 @@ io.on('connection', (socket) => {
       });
     } catch (err) {
       console.error('Accept ride error:', err);
+    }
+  });
+
+  socket.on('complete_ride', async ({ rideId, riderId }) => {
+    try {
+      const ride = await Ride.findById(rideId);
+      if (!ride || ride.status === 'completed') return;
+
+      ride.status = 'completed';
+      ride.completedAt = new Date();
+      if (riderId && !ride.riderId) ride.riderId = riderId;
+      await ride.save();
+
+      const targetRiderId = (riderId || ride.riderId || '').toString();
+      const stats = targetRiderId ? await computeRiderStats(targetRiderId) : null;
+
+      const completionPayload = {
+        rideId: ride._id,
+        customerName: ride.customerName,
+        riderName: ride.riderName,
+        pickupAddress: ride.pickupAddress,
+        dropAddress: ride.dropAddress,
+        distanceKm: ride.distanceKm,
+        fare: ride.fare,
+        stats
+      };
+
+      if (targetRiderId) {
+        io.to(`rider_${targetRiderId}`).emit('ride_completed_popup', completionPayload);
+      }
+      io.to(`ride_${rideId}`).emit('ride_completed_popup', completionPayload);
+    } catch (err) {
+      console.error('Complete ride error:', err);
     }
   });
 
@@ -251,7 +325,8 @@ app.post('/api/rider/auth', async (req, res) => {
     if (mode === 'login') {
       if (!existing) return res.status(404).json({ error: 'No rider account found with this mobile number. Please register first.' });
       const queuePosition = await Rider.countDocuments({ status: 'approved', joinedAt: { $lte: existing.joinedAt } });
-      return res.json({ rider: existing, queuePosition });
+      const stats = await computeRiderStats(existing._id);
+      return res.json({ rider: existing, queuePosition, stats });
     }
 
     if (existing) {
@@ -280,7 +355,17 @@ app.post('/api/rider/auth', async (req, res) => {
       vehicleNumber: newRider.vehicleNumber
     });
 
-    res.json({ rider: newRider, queuePosition: 0 });
+    const stats = await computeRiderStats(newRider._id);
+    res.json({ rider: newRider, queuePosition: 0, stats });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/rider/stats/:riderId', async (req, res) => {
+  try {
+    const stats = await computeRiderStats(req.params.riderId);
+    res.json({ stats });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -293,20 +378,6 @@ app.post('/api/rider/toggle-online', async (req, res) => {
     res.json({ rider });
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
-
-// Fallback polling endpoint in case a mobile browser temporarily throttles WebSockets
-app.get('/api/rider/check-pending-ride/:riderId', async (req, res) => {
-  try {
-    const rider = await Rider.findById(req.params.riderId);
-    if (!rider || rider.status !== 'approved' || !rider.isOnline) {
-      return res.json({ ride: null });
-    }
-    const searchingRide = await Ride.findOne({ status: 'searching' }).sort({ createdAt: 1 });
-    res.json({ ride: searchingRide || null });
-  } catch (err) {
-    res.json({ ride: null });
   }
 });
 
@@ -341,13 +412,13 @@ app.post('/api/customer/auth', async (req, res) => {
 
 app.post('/api/rides/book', async (req, res) => {
   try {
-    const { customerName, customerMobile, pickupAddress, pickupCoords, dropAddress, dropCoords, distanceKm, fare } = req.body;
+    const { customerName, customerMobile, pickupAddress, pickupCoords, dropAddress, dropCoords, distanceKm } = req.body;
     if (!pickupCoords || !dropCoords || !distanceKm) {
       return res.status(400).json({ error: 'Please select valid Pickup and Drop locations on the map.' });
     }
 
-    // Recalculate strictly at ₹5/km on server side for security
-    const verifiedFare = Math.max(5, Math.round(parseFloat(distanceKm) * 5));
+    // Strictly ₹7/km rate
+    const verifiedFare = Math.max(7, Math.round(parseFloat(distanceKm) * 7));
 
     const ride = await Ride.create({
       customerName,
@@ -397,7 +468,7 @@ app.get('*', (req, res) => {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Go²Go | Zero Commission Rides • ₹5/km</title>
+  <title>Go²Go | Zero Commission Rides • ₹7/km • Co-Powered by CareerBoot</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -448,7 +519,7 @@ app.get('*', (req, res) => {
       box-shadow: 0 14px 0 #1e3a8a, 0 25px 40px rgba(59, 130, 246, 0.35);
     }
     .glass {
-      background: rgba(15, 23, 42, 0.85);
+      background: rgba(15, 23, 42, 0.88);
       backdrop-filter: blur(16px);
       border: 1px solid rgba(255, 255, 255, 0.1);
     }
@@ -481,21 +552,24 @@ app.get('*', (req, res) => {
     .ring-pulse { animation: pulseRing 1.2s infinite; }
   </style>
 </head>
-<body class="relative">
+<body class="relative flex flex-col min-h-screen">
   <div class="hero-glow"></div>
 
-  <nav class="relative z-20 max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+  <nav class="relative z-20 max-w-6xl w-full mx-auto px-4 py-4 flex justify-between items-center">
     <div onclick="showView('landing')" class="flex items-center gap-3 cursor-pointer">
       <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-400 to-blue-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
         <svg class="w-6 h-6 text-slate-950" fill="none" stroke="currentColor" stroke-width="2.8" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
         </svg>
       </div>
-      <span class="text-2xl font-black tracking-tight">Go<sup class="text-emerald-400 text-lg">2</sup>Go</span>
+      <div>
+        <span class="text-2xl font-black tracking-tight leading-none block">Go<sup class="text-emerald-400 text-lg">2</sup>Go</span>
+        <span class="text-[10px] text-slate-400 font-semibold">Co-Powered by CareerBoot</span>
+      </div>
     </div>
     <div class="flex items-center gap-3">
       <span class="hidden sm:inline-block text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-        ₹5/km Flat • 0% Commission
+        ₹7/km Flat • 0% Commission
       </span>
       <button onclick="showView('admin')" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-slate-800 hover:border-slate-600 transition">
         Admin Panel
@@ -504,24 +578,27 @@ app.get('*', (req, res) => {
   </nav>
 
   <!-- VIEW 1: LANDING -->
-  <main id="view-landing" class="relative z-10 max-w-5xl mx-auto px-4 pt-8 pb-20 text-center">
+  <main id="view-landing" class="relative z-10 max-w-5xl w-full mx-auto px-4 pt-8 pb-16 text-center flex-1">
     <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-sm text-emerald-300 font-semibold mb-6">
       <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
       Direct Peer-to-Peer Pickup & Drop Network
     </div>
     <div class="flex flex-col items-center justify-center mb-6">
-      <h1 class="text-5xl sm:text-7xl font-black tracking-tight mb-4">
+      <h1 class="text-5xl sm:text-7xl font-black tracking-tight mb-3">
         Go<span class="text-emerald-400">²</span>Go
       </h1>
       <p class="text-xl sm:text-3xl font-extrabold bg-gradient-to-r from-emerald-300 via-white to-blue-300 bg-clip-text text-transparent max-w-2xl">
         Zero Commission for Riders. Pocket-Friendly for You.
       </p>
       <p class="text-slate-400 mt-3 max-w-xl text-sm sm:text-base">
-        Transparent <strong class="text-white">₹5/km</strong> distance pricing. 100% of the fare goes straight to the Rider with zero hidden charges.
+        Transparent <strong class="text-white">₹7/km</strong> distance pricing. 100% of the fare goes straight to the Rider with zero hidden charges.
       </p>
+      <div class="mt-4 inline-block px-4 py-1.5 rounded-full bg-blue-500/10 border border-blue-400/20 text-xs font-extrabold tracking-wide text-blue-300">
+        ⚡ Co-Powered by CareerBoot
+      </div>
     </div>
 
-    <div class="stage-4d grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto mt-12 px-2">
+    <div class="stage-4d grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto mt-10 px-2">
       <div onclick="showView('rider-auth')" onmousemove="tilt4D(event, this)" onmouseleave="reset4D(this)"
            class="btn-4d btn-4d-rider rounded-3xl p-8 text-left select-none">
         <div class="w-14 h-14 rounded-2xl bg-white/20 flex items-center justify-center mb-5 backdrop-blur-sm">
@@ -531,7 +608,7 @@ app.get('*', (req, res) => {
         </div>
         <div class="text-xs uppercase tracking-widest font-bold text-emerald-100 mb-1">Keep 100% Earnings</div>
         <h2 class="text-3xl font-black text-white">1. I'm Rider</h2>
-        <p class="text-emerald-100/90 text-sm mt-2">Register vehicle, get verified & receive direct ride rings in queue.</p>
+        <p class="text-emerald-100/90 text-sm mt-2">Register vehicle, get verified & track daily, weekly & monthly ₹/- stats.</p>
       </div>
 
       <div onclick="showView('customer-auth')" onmousemove="tilt4D(event, this)" onmouseleave="reset4D(this)"
@@ -542,7 +619,7 @@ app.get('*', (req, res) => {
             <path stroke-linecap="round" stroke-linejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
           </svg>
         </div>
-        <div class="text-xs uppercase tracking-widest font-bold text-blue-100 mb-1">Flat ₹5/km • No Surges</div>
+        <div class="text-xs uppercase tracking-widest font-bold text-blue-100 mb-1">Flat ₹7/km • No Surges</div>
         <h2 class="text-3xl font-black text-white">2. I'm Customer</h2>
         <p class="text-blue-100/90 text-sm mt-2">Pin pickup & drop on live map and get matched with verified riders.</p>
       </div>
@@ -550,7 +627,7 @@ app.get('*', (req, res) => {
   </main>
 
   <!-- VIEW 2: RIDER AUTH -->
-  <section id="view-rider-auth" class="hidden relative z-10 max-w-xl mx-auto px-4 py-8">
+  <section id="view-rider-auth" class="hidden relative z-10 max-w-xl w-full mx-auto px-4 py-8 flex-1">
     <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl">
       <div class="flex justify-between items-center mb-6">
         <h2 class="text-2xl font-black text-emerald-400">Rider Portal</h2>
@@ -612,9 +689,9 @@ app.get('*', (req, res) => {
     </div>
   </section>
 
-  <!-- VIEW 3: RIDER DASHBOARD -->
-  <section id="view-rider-dash" class="hidden relative z-10 max-w-2xl mx-auto px-4 py-8">
-    <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl">
+  <!-- VIEW 3: RIDER DASHBOARD (WITH DAILY / WEEKLY / MONTHLY STATS & GPS COMPLETION) -->
+  <section id="view-rider-dash" class="hidden relative z-10 max-w-3xl w-full mx-auto px-4 py-8 flex-1">
+    <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
       <div class="flex flex-wrap justify-between items-center gap-4 border-b border-slate-800 pb-5">
         <div class="flex items-center gap-3">
           <img id="rd-avatar" src="https://via.placeholder.com/60/10b981/ffffff?text=R" class="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-400" />
@@ -628,12 +705,46 @@ app.get('*', (req, res) => {
         </div>
       </div>
 
-      <div id="rd-pending-box" class="mt-6 bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 text-center">
+      <!-- DETAILED BOOKING & EARNINGS DASHBOARD (DAILY, WEEKLY, MONTHLY) -->
+      <div>
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="text-sm font-black uppercase tracking-wider text-emerald-400">📊 Bookings & Earnings Summary (0% Commission)</h3>
+          <button onclick="refreshRiderStats()" class="text-xs text-slate-400 hover:text-white underline">Refresh</button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <!-- DAILY -->
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs font-extrabold uppercase text-emerald-400 mb-2">Today (Daily)</div>
+            <div class="text-2xl font-black text-white">₹<span id="stat-daily-earn">0</span>/-</div>
+            <div class="text-xs text-slate-400 mt-1">
+              Rides: <strong class="text-white" id="stat-daily-rides">0</strong> • Distance: <strong class="text-white" id="stat-daily-km">0</strong> km
+            </div>
+          </div>
+          <!-- WEEKLY -->
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs font-extrabold uppercase text-blue-400 mb-2">This Week</div>
+            <div class="text-2xl font-black text-white">₹<span id="stat-weekly-earn">0</span>/-</div>
+            <div class="text-xs text-slate-400 mt-1">
+              Rides: <strong class="text-white" id="stat-weekly-rides">0</strong> • Distance: <strong class="text-white" id="stat-weekly-km">0</strong> km
+            </div>
+          </div>
+          <!-- MONTHLY -->
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs font-extrabold uppercase text-purple-400 mb-2">This Month</div>
+            <div class="text-2xl font-black text-white">₹<span id="stat-monthly-earn">0</span>/-</div>
+            <div class="text-xs text-slate-400 mt-1">
+              Rides: <strong class="text-white" id="stat-monthly-rides">0</strong> • Distance: <strong class="text-white" id="stat-monthly-km">0</strong> km
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="rd-pending-box" class="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 text-center">
         <h3 class="text-lg font-bold text-amber-300">Verification Request Submitted</h3>
         <p class="text-sm text-slate-300 mt-1">Admin has been notified to review your Aadhaar & Vehicle details. Once approved, you will automatically enter the First-Joined-First-Served ride queue.</p>
       </div>
 
-      <div id="rd-active-box" class="hidden mt-6 space-y-5">
+      <div id="rd-active-box" class="hidden space-y-5">
         <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 p-4 rounded-2xl border border-slate-800">
           <div>
             <p class="text-xs text-slate-400 uppercase font-bold">Queue Sequence Priority</p>
@@ -649,19 +760,19 @@ app.get('*', (req, res) => {
           </div>
         </div>
 
-        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 text-center">
-          <div class="flex justify-center items-center gap-2 text-xs text-emerald-400 font-bold mb-2">
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 text-center">
+          <div class="flex justify-center items-center gap-2 text-xs text-emerald-400 font-bold mb-1">
             <span id="socket-status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
             <span id="socket-status-text">Live Dispatch Connected</span>
           </div>
           <p class="font-bold text-white">Listening for Customer Rides...</p>
-          <p class="text-xs text-slate-400 mt-1">Tap <strong>"Enable & Test Ringtone"</strong> once so your phone browser permits loud alarm alerts when a ride arrives.</p>
         </div>
 
-        <div id="rd-accepted-card" class="hidden bg-emerald-950/60 border-2 border-emerald-400 rounded-2xl p-5 space-y-3">
+        <!-- ACTIVE RIDE & GPS AUTO-COMPLETION CARD -->
+        <div id="rd-accepted-card" class="hidden bg-emerald-950/60 border-2 border-emerald-400 rounded-2xl p-5 space-y-4">
           <div class="flex justify-between items-center">
-            <span class="text-xs font-black uppercase tracking-wider text-emerald-400">Active Ride Confirmed</span>
-            <span id="rd-ride-fare" class="text-xl font-black text-white">₹0</span>
+            <span class="text-xs font-black uppercase tracking-wider text-emerald-400">Active Ride In Progress</span>
+            <span id="rd-ride-fare" class="text-2xl font-black text-white">₹0</span>
           </div>
           <div class="bg-slate-950/70 p-4 rounded-xl space-y-1">
             <p class="text-xs text-slate-400">Customer Details:</p>
@@ -671,10 +782,16 @@ app.get('*', (req, res) => {
           <div class="text-xs space-y-1 text-slate-300">
             <p><strong class="text-emerald-400">Pickup:</strong> <span id="rd-cust-pickup"></span></p>
             <p><strong class="text-blue-400">Drop:</strong> <span id="rd-cust-drop"></span></p>
+            <p id="rd-gps-drop-dist" class="text-amber-300 font-bold pt-1">📍 Monitoring GPS to drop point...</p>
           </div>
-          <a id="rd-gmaps-nav" target="_blank" href="#" class="block text-center w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-sm text-white">
-            Open Turn-by-Turn Navigation
-          </a>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <a id="rd-gmaps-nav" target="_blank" href="#" class="text-center py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-sm text-white">
+              🗺️ Open Map Navigation
+            </a>
+            <button onclick="triggerRideCompletion()" class="py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm">
+              ✓ Complete Ride Now
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -705,8 +822,28 @@ app.get('*', (req, res) => {
     </div>
   </div>
 
+  <!-- RIDE COMPLETION POP-UP MODAL (GPS / MAP COMPLETION) -->
+  <div id="complete-modal" class="hidden fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="glass border-2 border-emerald-400 rounded-3xl max-w-md w-full p-6 text-center space-y-4">
+      <div class="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto text-3xl font-black">
+        ✓
+      </div>
+      <h3 class="text-2xl font-black text-white">Ride Completed!</h3>
+      <p class="text-xs text-slate-300">Destination reached on Map GPS. Trip summary recorded permanently.</p>
+      <div class="bg-slate-900/90 rounded-2xl p-4 text-left text-xs space-y-2 border border-slate-800">
+        <div class="flex justify-between"><span class="text-slate-400">Distance:</span><strong class="text-white" id="cmp-dist">0 km</strong></div>
+        <div class="flex justify-between"><span class="text-slate-400">Total Fare (₹7/km):</span><strong class="text-emerald-400 text-base" id="cmp-fare">₹0/-</strong></div>
+        <div class="text-slate-400 truncate"><span class="text-emerald-400 font-bold">From:</span> <span id="cmp-pickup" class="text-white"></span></div>
+        <div class="text-slate-400 truncate"><span class="text-blue-400 font-bold">To:</span> <span id="cmp-drop" class="text-white"></span></div>
+      </div>
+      <button onclick="closeCompletionModal()" class="w-full py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-base">
+        Done
+      </button>
+    </div>
+  </div>
+
   <!-- VIEW 4: CUSTOMER AUTH -->
-  <section id="view-customer-auth" class="hidden relative z-10 max-w-md mx-auto px-4 py-8">
+  <section id="view-customer-auth" class="hidden relative z-10 max-w-md w-full mx-auto px-4 py-8 flex-1">
     <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl">
       <div class="flex justify-between items-center mb-6">
         <h2 class="text-2xl font-black text-blue-400">Customer Access</h2>
@@ -736,19 +873,18 @@ app.get('*', (req, res) => {
   </section>
 
   <!-- VIEW 5: CUSTOMER BOOKING & MAP -->
-  <section id="view-customer-book" class="hidden relative z-10 max-w-4xl mx-auto px-4 py-6">
+  <section id="view-customer-book" class="hidden relative z-10 max-w-4xl w-full mx-auto px-4 py-6 flex-1">
     <div class="glass rounded-3xl p-5 sm:p-7 shadow-2xl space-y-5">
       <div class="flex flex-wrap justify-between items-center gap-2">
         <div>
           <h2 class="text-xl font-black text-white">Book Pickup & Drop</h2>
-          <p class="text-xs text-slate-400">Welcome, <span id="cb-username" class="text-blue-400 font-bold"></span> • Flat ₹5/km (Zero Hidden Fees)</p>
+          <p class="text-xs text-slate-400">Welcome, <span id="cb-username" class="text-blue-400 font-bold"></span> • Flat ₹7/km (Zero Hidden Fees)</p>
         </div>
         <button onclick="useCurrentGPS()" class="px-3 py-2 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/30">
           📍 Use My Current GPS
         </button>
       </div>
 
-      <!-- AUTOCOMPLETE LOCATION SEARCH INPUTS -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="relative bg-slate-900/90 p-3 rounded-2xl border border-slate-800">
           <label class="text-[11px] font-bold text-emerald-400 uppercase">1. Pickup Location</label>
@@ -781,7 +917,7 @@ app.get('*', (req, res) => {
           </div>
           <div class="h-8 w-px bg-slate-800"></div>
           <div>
-            <span class="text-xs text-slate-400 block">Total Fare (₹5/km)</span>
+            <span class="text-xs text-slate-400 block">Total Fare (₹7/km)</span>
             <span id="calc-fare" class="text-2xl font-black text-emerald-400">₹0</span>
           </div>
         </div>
@@ -822,7 +958,7 @@ app.get('*', (req, res) => {
   </section>
 
   <!-- VIEW 6: ADMIN -->
-  <section id="view-admin" class="hidden relative z-10 max-w-5xl mx-auto px-4 py-8">
+  <section id="view-admin" class="hidden relative z-10 max-w-5xl w-full mx-auto px-4 py-8 flex-1">
     <div class="glass rounded-3xl p-6 sm:p-8">
       <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
         <div>
@@ -830,7 +966,7 @@ app.get('*', (req, res) => {
           <p class="text-xs text-slate-400">Approve riders to activate them in the sequential dispatch loop</p>
         </div>
         <div class="flex gap-2">
-          <input type="password" id="admin-pass-input" placeholder="Admin Password (admin123)" class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white" />
+          <input type="password" id="admin-pass-input" placeholder="Enter Admin Password" class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white" />
           <button onclick="loadAdminData()" class="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs">Unlock / Refresh</button>
         </div>
       </div>
@@ -840,15 +976,22 @@ app.get('*', (req, res) => {
     </div>
   </section>
 
+  <!-- FOOTER: CO-POWERED BY CAREERBOOT -->
+  <footer class="relative z-10 max-w-6xl w-full mx-auto px-4 py-5 text-center border-t border-slate-800/80 text-xs text-slate-400">
+    Go<sup class="text-emerald-400">2</sup>Go • ₹7/km Zero Commission • <strong class="text-white">Co-Powered by CareerBoot</strong>
+  </footer>
+
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000 });
     let currentRider = null;
     let currentCustomer = null;
     let activeRideId = null;
+    let currentAcceptedRide = null;
     let incomingRingRideId = null;
     let ringCountdownInterval = null;
     let ringAudioInterval = null;
     let riderPollInterval = null;
+    let gpsWatchId = null;
     let riderAuthMode = 'register';
     let custAuthMode = 'register';
     let sharedAudioCtx = null;
@@ -860,7 +1003,6 @@ app.get('*', (req, res) => {
     let currentFare = 0;
     let searchTimeout = null;
 
-    // Automatically re-register rider socket after any network drop or mobile tab sleep
     socket.on('connect', () => {
       const dot = document.getElementById('socket-status-dot');
       const txt = document.getElementById('socket-status-text');
@@ -922,7 +1064,6 @@ app.get('*', (req, res) => {
       });
     }
 
-    // UNLOCK AUDIO & NOTIFICATION PERMISSIONS ON MOBILE
     function unlockAndTestSound() {
       if ('Notification' in window && Notification.permission !== 'granted') {
         Notification.requestPermission();
@@ -930,7 +1071,6 @@ app.get('*', (req, res) => {
       playLoudSiren();
     }
 
-    // LOUD SIREN + PHONE VIBRATION GENERATOR
     function playLoudSiren() {
       try {
         if (navigator.vibrate) {
@@ -970,7 +1110,17 @@ app.get('*', (req, res) => {
       } catch (e) {}
     }
 
-    // RIDER AUTH
+    // Haversine distance in meters between two GPS coordinates
+    function getDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const toRad = d => (d * Math.PI) / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // RIDER AUTH & STATS
     function switchRiderTab(mode) {
       riderAuthMode = mode;
       const isReg = mode === 'register';
@@ -983,7 +1133,6 @@ app.get('*', (req, res) => {
 
     async function handleRiderSubmit(e) {
       e.preventDefault();
-      // Unlock audio context immediately on user form tap
       try {
         if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
@@ -1008,10 +1157,33 @@ app.get('*', (req, res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         currentRider = data.rider;
+        if (data.stats) applyStatsToUI(data.stats);
         renderRiderDashboard(data.queuePosition);
         showView('rider-dash');
       } catch (err) { alert(err.message); }
       finally { btn.disabled = false; btn.innerText = riderAuthMode === 'register' ? 'Submit Request for Verification' : 'Login to Rider Dashboard'; }
+    }
+
+    function applyStatsToUI(stats) {
+      if (!stats) return;
+      document.getElementById('stat-daily-earn').innerText = stats.daily.totalEarnings;
+      document.getElementById('stat-daily-rides').innerText = stats.daily.totalRides;
+      document.getElementById('stat-daily-km').innerText = stats.daily.totalKm;
+
+      document.getElementById('stat-weekly-earn').innerText = stats.weekly.totalEarnings;
+      document.getElementById('stat-weekly-rides').innerText = stats.weekly.totalRides;
+      document.getElementById('stat-weekly-km').innerText = stats.weekly.totalKm;
+
+      document.getElementById('stat-monthly-earn').innerText = stats.monthly.totalEarnings;
+      document.getElementById('stat-monthly-rides').innerText = stats.monthly.totalRides;
+      document.getElementById('stat-monthly-km').innerText = stats.monthly.totalKm;
+    }
+
+    async function refreshRiderStats() {
+      if (!currentRider || !currentRider._id) return;
+      const res = await fetch('/api/rider/stats/' + currentRider._id);
+      const data = await res.json();
+      if (data.stats) applyStatsToUI(data.stats);
     }
 
     function renderRiderDashboard(queuePos) {
@@ -1019,6 +1191,7 @@ app.get('*', (req, res) => {
       document.getElementById('rd-vehicle').innerText = \`\${currentRider.vehicleType} • \${currentRider.vehicleModel} (\${currentRider.vehicleNumber})\`;
       if (currentRider.profileImage) document.getElementById('rd-avatar').src = currentRider.profileImage;
       socket.emit('register_rider_socket', currentRider._id);
+      refreshRiderStats();
 
       const badge = document.getElementById('rd-badge');
       if (currentRider.status === 'approved') {
@@ -1034,7 +1207,6 @@ app.get('*', (req, res) => {
       }
     }
 
-    // Keeps socket registration fresh every 10 seconds while rider is active
     function startRiderHeartbeat() {
       clearInterval(riderPollInterval);
       riderPollInterval = setInterval(() => {
@@ -1060,9 +1232,7 @@ app.get('*', (req, res) => {
     });
 
     socket.on('incoming_ride_ring', (ride) => {
-      // Prevent duplicate interval resets if both room and direct socket emit fire simultaneously
       if (incomingRingRideId === ride.rideId) return;
-
       incomingRingRideId = ride.rideId;
       document.getElementById('ring-fare').innerText = '₹' + ride.fare;
       document.getElementById('ring-dist').innerText = \`\${ride.distanceKm} km • 100% Yours (0% Commission)\`;
@@ -1109,7 +1279,44 @@ app.get('*', (req, res) => {
       socket.emit('accept_ride', { rideId: acceptedId, riderId: currentRider._id });
     }
 
+    // Start live GPS tracking toward Drop point to auto-trigger Ride Completion Pop-up
+    function startGPSCompletionMonitor(rideDetails) {
+      if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
+      if (!navigator.geolocation || !rideDetails.dropCoords) return;
+
+      gpsWatchId = navigator.geolocation.watchPosition((pos) => {
+        const distMeters = getDistanceMeters(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          rideDetails.dropCoords.lat,
+          rideDetails.dropCoords.lng
+        );
+        const distEl = document.getElementById('rd-gps-drop-dist');
+        if (distEl) {
+          distEl.innerText = \`📍 GPS Distance to Drop: \${Math.round(distMeters)}m (Auto-completes within 150m)\`;
+        }
+        if (distMeters <= 150 && currentAcceptedRide) {
+          navigator.geolocation.clearWatch(gpsWatchId);
+          gpsWatchId = null;
+          triggerRideCompletion();
+        }
+      }, null, { enableHighAccuracy: true, maximumAge: 5000 });
+    }
+
+    function triggerRideCompletion() {
+      if (!currentAcceptedRide) return;
+      if (gpsWatchId) {
+        navigator.geolocation.clearWatch(gpsWatchId);
+        gpsWatchId = null;
+      }
+      socket.emit('complete_ride', {
+        rideId: currentAcceptedRide.rideId,
+        riderId: currentRider ? currentRider._id : null
+      });
+    }
+
     socket.on('ride_confirmed_for_rider', (details) => {
+      currentAcceptedRide = details;
       const card = document.getElementById('rd-accepted-card');
       card.classList.remove('hidden');
       document.getElementById('rd-ride-fare').innerText = '₹' + details.fare;
@@ -1120,7 +1327,34 @@ app.get('*', (req, res) => {
       document.getElementById('rd-cust-pickup').innerText = details.pickupAddress;
       document.getElementById('rd-cust-drop').innerText = details.dropAddress;
       document.getElementById('rd-gmaps-nav').href = \`https://www.google.com/maps/dir/?api=1&origin=\${details.pickupCoords.lat},\${details.pickupCoords.lng}&destination=\${details.dropCoords.lat},\${details.dropCoords.lng}\`;
+
+      startGPSCompletionMonitor(details);
     });
+
+    socket.on('ride_completed_popup', (info) => {
+      document.getElementById('cmp-dist').innerText = info.distanceKm + ' km';
+      document.getElementById('cmp-fare').innerText = '₹' + info.fare + '/-';
+      document.getElementById('cmp-pickup').innerText = info.pickupAddress || '-';
+      document.getElementById('cmp-drop').innerText = info.dropAddress || '-';
+      document.getElementById('complete-modal').classList.remove('hidden');
+
+      if (info.stats) applyStatsToUI(info.stats);
+      document.getElementById('rd-accepted-card').classList.add('hidden');
+      currentAcceptedRide = null;
+
+      // Reset customer live tracker if open
+      activeRideId = null;
+      document.getElementById('live-ride-box').classList.add('hidden');
+      document.getElementById('searching-state').classList.remove('hidden');
+      document.getElementById('accepted-state').classList.add('hidden');
+      document.getElementById('booking-controls').classList.remove('hidden');
+      document.getElementById('confirm-ride-btn').disabled = false;
+      document.getElementById('confirm-ride-btn').innerText = 'Confirm the Ride';
+    });
+
+    function closeCompletionModal() {
+      document.getElementById('complete-modal').classList.add('hidden');
+    }
 
     socket.on('accept_failed', ({ message }) => alert(message));
 
@@ -1153,7 +1387,7 @@ app.get('*', (req, res) => {
 
     function initMap() {
       if (map) { map.invalidateSize(); return; }
-      const defaultCenter = [26.8467, 80.9462]; // Lucknow
+      const defaultCenter = [26.8467, 80.9462];
       map = L.map('map').setView(defaultCenter, 13);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
@@ -1244,7 +1478,7 @@ app.get('*', (req, res) => {
         if (data.routes && data.routes.length > 0) {
           const route = data.routes[0];
           currentDistanceKm = parseFloat((route.distance / 1000).toFixed(2));
-          currentFare = Math.max(5, Math.round(currentDistanceKm * 5)); // ₹5/km
+          currentFare = Math.max(7, Math.round(currentDistanceKm * 7)); // ₹7/km
 
           if (routeLine) map.removeLayer(routeLine);
           const latLngs = route.geometry.coordinates.map(c => [c[1], c[0]]);
