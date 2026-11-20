@@ -355,8 +355,14 @@ app.post('/api/customer/waitlist', async (req, res) => {
       return res.status(400).json({ error: 'Enter Name & 10-digit Mobile.' });
     }
     const existing = await Customer.findOne({ mobile });
-    if (existing) return res.json({ message: 'VIP Pass Active! See you at launch.' });
-    await Customer.create({ name, mobile });
+    if (existing) {
+      existing.name = name;
+      await existing.save();
+      io.to('admin_room').emit('new_customer_waitlist', { name: existing.name, mobile: existing.mobile });
+      return res.json({ message: 'VIP Pass Active! See you at launch.' });
+    }
+    const created = await Customer.create({ name, mobile });
+    io.to('admin_room').emit('new_customer_waitlist', { name: created.name, mobile: created.mobile });
     res.json({ message: 'VIP Pass Unlocked! Launch alert incoming.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -367,7 +373,8 @@ app.post('/api/admin/riders', async (req, res) => {
   const { password } = req.body;
   if (password !== ADMIN_PASS) return res.status(401).json({ error: 'Wrong Password' });
   const riders = await Rider.find().sort({ joinedAt: 1 });
-  res.json({ riders });
+  const customers = await Customer.find().sort({ createdAt: 1 });
+  res.json({ riders, customers });
 });
 
 app.post('/api/admin/verify-rider', async (req, res) => {
@@ -390,6 +397,7 @@ app.get('*', (req, res) => {
   <title>Go²Go • 0% Commission Rides • ₹7/km</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;900&display=swap" rel="stylesheet">
   <style>
     body {
@@ -848,17 +856,56 @@ app.get('*', (req, res) => {
     </div>
   </div>
 
-  <!-- VIEW 6: ADMIN -->
+  <!-- VIEW 6: ADMIN (CUSTOMERS XLSX EXPORT + RIDERS XLSX EXPORT) -->
   <section id="view-admin" class="hidden relative z-10 max-w-5xl w-full mx-auto px-4 py-8 flex-1">
-    <div class="glass rounded-3xl p-6">
-      <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-        <h2 class="text-xl font-black text-white">Admin Verification</h2>
+    <div class="glass rounded-3xl p-6 space-y-8">
+      <div class="flex flex-wrap justify-between items-center gap-4 border-b border-slate-800 pb-4">
+        <h2 class="text-xl font-black text-white">Admin Control Center</h2>
         <div class="flex gap-2">
           <input type="password" id="admin-pass-input" placeholder="Password" class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white" />
           <button onclick="loadAdminData()" class="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs">Unlock</button>
         </div>
       </div>
-      <div id="admin-riders-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+
+      <!-- Customer Notify Me Waitlist Section -->
+      <div class="space-y-3">
+        <div class="flex flex-wrap justify-between items-center gap-3">
+          <div>
+            <h3 class="text-lg font-black text-sky-400">Customer "Notify Me" Waitlist (<span id="admin-cust-count">0</span>)</h3>
+            <p class="text-xs text-slate-400">Customers who filled Name & Mobile Number</p>
+          </div>
+          <button id="export-cust-btn" onclick="exportCustomersToExcel()" class="hidden px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-xs shadow-lg transition">
+            📥 Export Customers (.xlsx)
+          </button>
+        </div>
+
+        <div class="overflow-x-auto bg-slate-900/90 border border-slate-800 rounded-2xl">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-950 text-slate-400 uppercase border-b border-slate-800">
+              <tr>
+                <th class="px-4 py-3">#</th>
+                <th class="px-4 py-3">Customer Name</th>
+                <th class="px-4 py-3">Mobile Number</th>
+                <th class="px-4 py-3">Submitted On</th>
+              </tr>
+            </thead>
+            <tbody id="admin-customers-list" class="divide-y divide-slate-800 text-slate-200">
+              <tr><td colspan="4" class="px-4 py-4 text-slate-500 text-center">Unlock Admin to view customer waitlist.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Rider Verification Section -->
+      <div class="space-y-3">
+        <div class="flex flex-wrap justify-between items-center gap-3">
+          <h3 class="text-lg font-black text-emerald-400">Rider Verification Queue (<span id="admin-rider-count">0</span>)</h3>
+          <button id="export-rider-btn" onclick="exportRidersToExcel()" class="hidden px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shadow-lg transition">
+            📥 Export Riders (.xlsx)
+          </button>
+        </div>
+        <div id="admin-riders-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+      </div>
     </div>
   </section>
 
@@ -877,6 +924,8 @@ app.get('*', (req, res) => {
     let gpsWatchId = null;
     let riderAuthMode = 'register';
     let sharedAudioCtx = null;
+    let cachedAdminCustomers = [];
+    let cachedAdminRiders = [];
 
     fetch('/api/public/stats')
       .then(r => r.json())
@@ -1198,6 +1247,7 @@ app.get('*', (req, res) => {
     function closeCompletionModal() { document.getElementById('complete-modal').classList.add('hidden'); }
     socket.on('accept_failed', ({ message }) => alert(message));
 
+    // ADMIN
     async function loadAdminData() {
       const password = document.getElementById('admin-pass-input').value;
       socket.emit('join_admin_room', password);
@@ -1205,10 +1255,44 @@ app.get('*', (req, res) => {
       const data = await res.json();
       if (!res.ok) return alert(data.error);
 
-      const container = document.getElementById('admin-riders-list');
-      if (data.riders.length === 0) { container.innerHTML = '<p class="text-slate-400 text-sm">No riders yet.</p>'; return; }
+      // Render Customer Waitlist
+      cachedAdminCustomers = data.customers || [];
+      document.getElementById('admin-cust-count').innerText = cachedAdminCustomers.length;
+      const exportCustBtn = document.getElementById('export-cust-btn');
+      const custBody = document.getElementById('admin-customers-list');
 
-      container.innerHTML = data.riders.map((r, idx) => \`
+      if (cachedAdminCustomers.length === 0) {
+        exportCustBtn.classList.add('hidden');
+        custBody.innerHTML = '<tr><td colspan="4" class="px-4 py-4 text-slate-400 text-center">No customer signups yet.</td></tr>';
+      } else {
+        exportCustBtn.classList.remove('hidden');
+        custBody.innerHTML = cachedAdminCustomers.map((c, idx) => {
+          const dt = c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+          return \`
+            <tr class="hover:bg-slate-800/50">
+              <td class="px-4 py-3 font-bold text-slate-400">\${idx + 1}</td>
+              <td class="px-4 py-3 font-bold text-white">\${c.name}</td>
+              <td class="px-4 py-3 font-black text-sky-400">\${c.mobile}</td>
+              <td class="px-4 py-3 text-slate-400">\${dt}</td>
+            </tr>
+          \`;
+        }).join('');
+      }
+
+      // Render Riders
+      cachedAdminRiders = data.riders || [];
+      document.getElementById('admin-rider-count').innerText = cachedAdminRiders.length;
+      const exportRiderBtn = document.getElementById('export-rider-btn');
+      const container = document.getElementById('admin-riders-list');
+
+      if (cachedAdminRiders.length === 0) {
+        exportRiderBtn.classList.add('hidden');
+        container.innerHTML = '<p class="text-slate-400 text-sm">No riders yet.</p>';
+        return;
+      }
+
+      exportRiderBtn.classList.remove('hidden');
+      container.innerHTML = cachedAdminRiders.map((r, idx) => \`
         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3">
           <div class="flex justify-between items-start">
             <div>
@@ -1232,6 +1316,70 @@ app.get('*', (req, res) => {
       \`).join('');
     }
 
+    function exportCustomersToExcel() {
+      if (!cachedAdminCustomers || cachedAdminCustomers.length === 0) {
+        return alert('No customer data to export.');
+      }
+      const rows = cachedAdminCustomers.map((c, idx) => ({
+        'S.No': idx + 1,
+        'Customer Name': String(c.name || ''),
+        'Mobile Number': String(c.mobile || ''),
+        'Registered At': c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN') : ''
+      }));
+
+      const today = new Date().toISOString().slice(0, 10);
+      if (typeof XLSX !== 'undefined') {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [{ wch: 8 }, { wch: 26 }, { wch: 18 }, { wch: 24 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Customer Waitlist');
+        XLSX.writeFile(wb, \`Go2Go_Customers_Waitlist_\${today}.xlsx\`);
+      } else {
+        const headers = ['S.No', 'Customer Name', 'Mobile Number', 'Registered At'];
+        const csvRows = rows.map(r => [
+          r['S.No'],
+          '"' + r['Customer Name'].replace(/"/g, '""') + '"',
+          '="' + r['Mobile Number'] + '"',
+          '"' + r['Registered At'] + '"'
+        ].join(','));
+        const csvContent = '\\uFEFF' + [headers.join(','), ...csvRows].join('\\r\\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = \`Go2Go_Customers_Waitlist_\${today}.csv\`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    function exportRidersToExcel() {
+      if (!cachedAdminRiders || cachedAdminRiders.length === 0) {
+        return alert('No rider data to export.');
+      }
+      const rows = cachedAdminRiders.map((r, idx) => ({
+        'Queue Rank': idx + 1,
+        'Rider Name': String(r.name || ''),
+        'Mobile Number': String(r.mobile || ''),
+        'Vehicle Type': String(r.vehicleType || ''),
+        'Vehicle Number': String(r.vehicleNumber || ''),
+        'Vehicle Model': String(r.vehicleModel || ''),
+        'Status': String(r.status || '').toUpperCase(),
+        'Joined At': r.joinedAt ? new Date(r.joinedAt).toLocaleString('en-IN') : ''
+      }));
+
+      const today = new Date().toISOString().slice(0, 10);
+      if (typeof XLSX !== 'undefined') {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [{ wch: 12 }, { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 24 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Rider Queue');
+        XLSX.writeFile(wb, \`Go2Go_Riders_Queue_\${today}.xlsx\`);
+      }
+    }
+
     async function verifyRider(riderId, status) {
       const password = document.getElementById('admin-pass-input').value;
       await fetch('/api/admin/verify-rider', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, riderId, status }) });
@@ -1240,6 +1388,10 @@ app.get('*', (req, res) => {
 
     socket.on('new_rider_verification', (rider) => {
       alert(\`New Rider: \${rider.name} (\${rider.vehicleNumber})\`);
+      if (document.getElementById('admin-pass-input').value) loadAdminData();
+    });
+
+    socket.on('new_customer_waitlist', () => {
       if (document.getElementById('admin-pass-input').value) loadAdminData();
     });
   </script>
