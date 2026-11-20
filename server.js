@@ -288,18 +288,18 @@ app.post('/api/rider/auth', async (req, res) => {
     const existing = await Rider.findOne({ mobile });
 
     if (mode === 'login') {
-      if (!existing) return res.status(404).json({ error: 'Number not found. Register first!' });
+      if (!existing) return res.status(404).json({ error: 'Number not found. Join squad first!' });
       const queuePosition = await Rider.countDocuments({ joinedAt: { $lte: existing.joinedAt } });
       const stats = await computeRiderStats(existing._id);
       return res.json({ rider: existing, queuePosition, stats });
     }
 
     if (existing) {
-      return res.status(400).json({ error: 'Already registered! Tap Login.' });
+      return res.status(400).json({ error: 'Already in squad! Tap Login.' });
     }
 
     if (!name || !vehicleType || !vehicleNumber || !vehicleModel || !aadhaarImage || !vehicleImage) {
-      return res.status(400).json({ error: 'Fill all fields & upload Aadhaar + Vehicle photo.' });
+      return res.status(400).json({ error: 'Fill all details & upload Aadhaar + Vehicle photo.' });
     }
 
     const newRider = await Rider.create({
@@ -355,9 +355,9 @@ app.post('/api/customer/waitlist', async (req, res) => {
       return res.status(400).json({ error: 'Enter Name & 10-digit Mobile.' });
     }
     const existing = await Customer.findOne({ mobile });
-    if (existing) return res.json({ message: 'You are already on the VIP list! 🎉' });
+    if (existing) return res.json({ message: 'VIP Pass Active! See you at launch.' });
     await Customer.create({ name, mobile });
-    res.json({ message: 'VIP Spot Locked! We will alert you at launch. 🚀' });
+    res.json({ message: 'VIP Pass Unlocked! Launch alert incoming.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -379,7 +379,7 @@ app.post('/api/admin/verify-rider', async (req, res) => {
 });
 
 // ==========================================
-// FRONTEND SINGLE-PAGE APPLICATION (STICKER-DRIVEN VIBE)
+// FRONTEND SINGLE-PAGE APPLICATION
 // ==========================================
 app.get('*', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -387,61 +387,83 @@ app.get('*', (req, res) => {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Go²Go • 0% Commission • ₹7/km</title>
+  <title>Go²Go • 0% Commission Rides • ₹7/km</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/socket.io/socket.io.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;900&display=swap" rel="stylesheet">
   <style>
     body {
       font-family: 'Outfit', sans-serif;
-      background: radial-gradient(circle at 20% 10%, #0f172a, #020617 75%);
+      background:
+        radial-gradient(circle at 15% 15%, rgba(16,185,129,0.16), transparent 40%),
+        radial-gradient(circle at 85% 20%, rgba(59,130,246,0.16), transparent 40%),
+        linear-gradient(180deg, #091224 0%, #020617 100%);
       color: #f8fafc;
       min-height: 100vh;
       overflow-x: hidden;
     }
 
-    /* Ambient Neon Orbs */
-    .orb-1 {
+    /* Subtle Street-Grid Backdrop for Ride Concept */
+    .road-grid {
       position: fixed;
-      width: 420px; height: 420px;
-      background: radial-gradient(circle, rgba(16,185,129,0.25) 0%, transparent 70%);
-      top: -80px; left: -60px; pointer-events: none; z-index: 0;
-    }
-    .orb-2 {
-      position: fixed;
-      width: 420px; height: 420px;
-      background: radial-gradient(circle, rgba(59,130,246,0.22) 0%, transparent 70%);
-      bottom: -80px; right: -60px; pointer-events: none; z-index: 0;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(148,163,184,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148,163,184,0.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+      z-index: 0;
     }
 
-    /* Characterized Sticker Styles (Die-cut white border + 3D float) */
+    /* Promo Marquee Strip */
+    .marquee-wrap {
+      overflow: hidden;
+      white-space: nowrap;
+      background: linear-gradient(90deg, #10b981, #38bdf8, #fbbf24, #10b981);
+      color: #020617;
+      font-weight: 900;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 0;
+    }
+    .marquee-track {
+      display: inline-block;
+      animation: marqueeScroll 18s linear infinite;
+    }
+    @keyframes marqueeScroll {
+      0% { transform: translateX(0%); }
+      100% { transform: translateX(-50%); }
+    }
+
+    /* Die-Cut Concept Stickers */
     .sticker {
-      filter: drop-shadow(0 12px 18px rgba(0,0,0,0.55));
+      filter: drop-shadow(0 14px 20px rgba(0,0,0,0.65));
       user-select: none;
-      transition: transform 0.3s ease;
+      transition: transform 0.25s ease;
     }
     .sticker:hover {
-      transform: scale(1.12) rotate(4deg) !important;
+      transform: scale(1.12) rotate(3deg) !important;
     }
 
-    @keyframes floatSlow {
+    @keyframes floatA {
       0%, 100% { transform: translateY(0px) rotate(-6deg); }
-      50% { transform: translateY(-14px) rotate(-2deg); }
+      50% { transform: translateY(-13px) rotate(-2deg); }
     }
-    @keyframes floatAlt {
+    @keyframes floatB {
       0%, 100% { transform: translateY(0px) rotate(7deg); }
-      50% { transform: translateY(-16px) rotate(12deg); }
+      50% { transform: translateY(-15px) rotate(11deg); }
     }
-    @keyframes floatBounce {
+    @keyframes floatC {
       0%, 100% { transform: translateY(0px) scale(1); }
       50% { transform: translateY(-10px) scale(1.05); }
     }
 
-    .anim-float-1 { animation: floatSlow 4.2s ease-in-out infinite; }
-    .anim-float-2 { animation: floatAlt 4.8s ease-in-out infinite; }
-    .anim-float-3 { animation: floatBounce 3.6s ease-in-out infinite; }
+    .anim-a { animation: floatA 4s ease-in-out infinite; }
+    .anim-b { animation: floatB 4.6s ease-in-out infinite; }
+    .anim-c { animation: floatC 3.5s ease-in-out infinite; }
 
-    /* 4D Interactive Cards */
+    /* 4D Cards */
     .stage-4d { perspective: 1200px; }
     .btn-4d {
       position: relative;
@@ -459,17 +481,17 @@ app.get('*', (req, res) => {
       transition: transform 0.65s ease;
     }
     .btn-4d:hover::before { transform: translateX(100%); }
-    .btn-4d-rider {
+    .card-rider {
       background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-      box-shadow: 0 14px 0 #064e3b, 0 25px 45px rgba(16, 185, 129, 0.45);
+      box-shadow: 0 14px 0 #064e3b, 0 25px 45px rgba(16, 185, 129, 0.42);
     }
-    .btn-4d-customer {
+    .card-customer {
       background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-      border: 1.5px solid rgba(96, 165, 250, 0.4);
-      box-shadow: 0 14px 0 #090d16, 0 25px 40px rgba(30, 58, 138, 0.25);
+      border: 2px solid rgba(56, 189, 248, 0.45);
+      box-shadow: 0 14px 0 #090d16, 0 25px 40px rgba(14, 165, 233, 0.2);
     }
     .glass {
-      background: rgba(15, 23, 42, 0.88);
+      background: rgba(15, 23, 42, 0.9);
       backdrop-filter: blur(16px);
       border: 1px solid rgba(255, 255, 255, 0.12);
     }
@@ -482,18 +504,33 @@ app.get('*', (req, res) => {
   </style>
 </head>
 <body class="relative flex flex-col min-h-screen">
-  <div class="orb-1"></div>
-  <div class="orb-2"></div>
+  <div class="road-grid"></div>
 
-  <!-- Minimal Top Header -->
-  <nav class="relative z-20 max-w-6xl w-full mx-auto px-4 py-4 flex justify-between items-center">
+  <!-- Top Advertising Ticker -->
+  <div class="marquee-wrap relative z-30">
+    <div class="marquee-track">
+      &nbsp;&nbsp;ZERO COMMISSION FOREVER • 100% RIDER EARNINGS • ₹7/KM FLAT • FIRST JOINED = #1 PRIORITY QUEUE • CO-POWERED BY CAREERBOOT • CUSTOMER RIDES DROPPING SOON &nbsp;&nbsp;&nbsp;&nbsp;
+      ZERO COMMISSION FOREVER • 100% RIDER EARNINGS • ₹7/KM FLAT • FIRST JOINED = #1 PRIORITY QUEUE • CO-POWERED BY CAREERBOOT • CUSTOMER RIDES DROPPING SOON &nbsp;&nbsp;&nbsp;&nbsp;
+    </div>
+  </div>
+
+  <!-- Header -->
+  <nav class="relative z-20 max-w-6xl w-full mx-auto px-4 py-3.5 flex justify-between items-center">
     <div onclick="showView('landing')" class="flex items-center gap-2.5 cursor-pointer">
-      <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-400 to-blue-500 flex items-center justify-center shadow-lg">
-        <span class="text-slate-950 font-black text-lg">⚡</span>
-      </div>
+      <!-- Brand Route Bolt SVG -->
+      <svg class="w-10 h-10 shrink-0" viewBox="0 0 48 48" fill="none">
+        <rect width="48" height="48" rx="14" fill="url(#brandGrad)"/>
+        <path d="M26.5 10L15 26H24L21.5 38L33 22H24L26.5 10Z" fill="#020617"/>
+        <defs>
+          <linearGradient id="brandGrad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#34D399"/>
+            <stop offset="1" stop-color="#38BDF8"/>
+          </linearGradient>
+        </defs>
+      </svg>
       <div>
         <span class="text-2xl font-black tracking-tight leading-none block">Go<sup class="text-emerald-400 text-base">2</sup>Go</span>
-        <span class="text-[10px] text-blue-300 font-bold tracking-wide">Co-Powered by CareerBoot</span>
+        <span class="text-[10px] text-amber-300 font-extrabold tracking-wide">Co-Powered by CareerBoot</span>
       </div>
     </div>
     <button onclick="showView('admin')" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-xl border border-slate-800 hover:border-slate-600 transition">
@@ -502,98 +539,120 @@ app.get('*', (req, res) => {
   </nav>
 
   <!-- =========================================================
-       VIEW 1: STICKER-VIBE LANDING PAGE (ZERO CLUTTER)
+       VIEW 1: CONCEPT STICKER LANDING PAGE
   ========================================================== -->
-  <main id="view-landing" class="relative z-10 max-w-5xl w-full mx-auto px-4 pt-4 pb-16 text-center flex-1 flex flex-col justify-center">
+  <main id="view-landing" class="relative z-10 max-w-5xl w-full mx-auto px-4 pt-3 pb-14 text-center flex-1 flex flex-col justify-center">
 
-    <!-- Floating Characterized Stickers Stage -->
-    <div class="relative max-w-3xl w-full mx-auto py-4">
+    <div class="relative max-w-3xl w-full mx-auto py-6">
 
-      <!-- STICKER 1 (Top Left): Turbo Helmet Rider Mascot -->
-      <div class="sticker anim-float-1 hidden sm:flex flex-col items-center absolute -left-8 -top-4 bg-white text-slate-950 px-3.5 py-2 rounded-3xl border-4 border-emerald-400 rotate-[-8deg] z-20">
-        <span class="text-3xl leading-none">🛵💨</span>
-        <span class="text-[11px] font-black uppercase tracking-tight text-emerald-700 mt-0.5">0% CUT</span>
+      <!-- STICKER 1 (Top Left): Concept Scooter & Route Pin Sticker -->
+      <div class="sticker anim-a hidden sm:flex items-center gap-2 absolute -left-8 -top-3 bg-white text-slate-950 px-3.5 py-2 rounded-3xl border-4 border-emerald-400 rotate-[-7deg] z-20">
+        <svg class="w-9 h-9" viewBox="0 0 48 48" fill="none">
+          <circle cx="14" cy="34" r="7" stroke="#0F172A" stroke-width="3.5" fill="#E2E8F0"/>
+          <circle cx="35" cy="34" r="7" stroke="#0F172A" stroke-width="3.5" fill="#E2E8F0"/>
+          <path d="M14 34H24L30 22H37" stroke="#059669" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M22 22H17L14 15H10" stroke="#0F172A" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="32" cy="11" r="5" fill="#10B981"/>
+        </svg>
+        <div class="text-left leading-tight">
+          <div class="text-[11px] font-black text-emerald-700">0% CUT</div>
+          <div class="text-[9px] font-extrabold text-slate-600">FULL FARE</div>
+        </div>
       </div>
 
-      <!-- STICKER 2 (Top Right): Golden Crown #1 Priority -->
-      <div class="sticker anim-float-2 hidden sm:flex flex-col items-center absolute -right-6 -top-2 bg-amber-300 text-slate-950 px-3.5 py-2 rounded-3xl border-4 border-white rotate-[9deg] z-20">
-        <span class="text-3xl leading-none">👑🔥</span>
-        <span class="text-[11px] font-black uppercase tracking-tight mt-0.5">1st IN = 1st RIDE</span>
+      <!-- STICKER 2 (Top Right): #1 Queue Podium Crown Sticker -->
+      <div class="sticker anim-b hidden sm:flex items-center gap-2 absolute -right-7 -top-2 bg-amber-300 text-slate-950 px-3.5 py-2 rounded-3xl border-4 border-white rotate-[8deg] z-20">
+        <svg class="w-9 h-9" viewBox="0 0 48 48" fill="none">
+          <path d="M9 35L7 16L18 24L24 12L30 24L41 16L39 35H9Z" fill="#F59E0B" stroke="#0F172A" stroke-width="3" stroke-linejoin="round"/>
+          <rect x="9" y="36" width="30" height="5" rx="2" fill="#0F172A"/>
+        </svg>
+        <div class="text-left leading-tight">
+          <div class="text-[11px] font-black">#1 QUEUE</div>
+          <div class="text-[9px] font-extrabold text-slate-800">EARLY JOIN</div>
+        </div>
       </div>
 
-      <!-- STICKER 3 (Bottom Left): Rupee Rocket -->
-      <div class="sticker anim-float-3 hidden md:flex items-center gap-1.5 absolute -left-4 bottom-2 bg-slate-900 text-white px-3.5 py-2 rounded-full border-2 border-emerald-400 rotate-[-5deg] z-20">
-        <span class="text-xl">💸</span>
-        <span class="text-xs font-black text-emerald-400">₹7/KM FLAT</span>
+      <!-- STICKER 3 (Bottom Left): ₹7/km Fare Meter Sticker -->
+      <div class="sticker anim-c hidden md:flex items-center gap-2 absolute -left-5 bottom-1 bg-slate-900 text-white px-3.5 py-2 rounded-full border-2 border-emerald-400 rotate-[-5deg] z-20">
+        <svg class="w-6 h-6" viewBox="0 0 32 32" fill="none">
+          <circle cx="16" cy="16" r="13" fill="#10B981" fill-opacity="0.2" stroke="#34D399" stroke-width="2.5"/>
+          <path d="M11 10H21M11 15H21M17 10C19.5 10 21 11.5 21 13.5C21 15.5 19.5 17 17 17H11L20 24" stroke="#34D399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="text-xs font-black text-emerald-300">₹7 / KM</span>
       </div>
 
-      <!-- STICKER 4 (Bottom Right): Verified Shield -->
-      <div class="sticker anim-float-1 hidden md:flex items-center gap-1.5 absolute -right-4 bottom-2 bg-slate-900 text-white px-3.5 py-2 rounded-full border-2 border-blue-400 rotate-[6deg] z-20">
-        <span class="text-xl">🛡️</span>
-        <span class="text-xs font-black text-blue-300">100% YOURS</span>
+      <!-- STICKER 4 (Bottom Right): Live Rider Squad Counter Sticker -->
+      <div class="sticker anim-a hidden md:flex items-center gap-2 absolute -right-5 bottom-1 bg-slate-900 text-white px-3.5 py-2 rounded-full border-2 border-sky-400 rotate-[6deg] z-20">
+        <svg class="w-6 h-6" viewBox="0 0 32 32" fill="none">
+          <path d="M16 4C11.03 4 7 8.03 7 13C7 19.75 16 28 16 28C16 28 25 19.75 25 13C25 8.03 20.97 4 16 4Z" fill="#38BDF8" fill-opacity="0.25" stroke="#38BDF8" stroke-width="2.5"/>
+          <circle cx="16" cy="13" r="4" fill="#38BDF8"/>
+        </svg>
+        <span class="text-xs font-black text-sky-300" id="live-rider-counter">RIDER DRIVE</span>
       </div>
 
-      <!-- Central Hero Logo & Short Tagline -->
-      <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-xs font-black text-emerald-300 mb-3">
+      <!-- Campaign Pill -->
+      <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-xs font-black text-emerald-300 mb-2">
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-        RIDER ONBOARDING OPEN
+        RIDER ONBOARDING • ZERO COMMISSION
       </div>
 
       <h1 class="text-6xl sm:text-8xl font-black tracking-tighter leading-none">
         Go<span class="text-emerald-400">²</span>Go
       </h1>
 
-      <p class="text-xl sm:text-3xl font-black bg-gradient-to-r from-emerald-300 via-white to-blue-300 bg-clip-text text-transparent mt-2">
+      <p class="text-xl sm:text-3xl font-black bg-gradient-to-r from-emerald-300 via-white to-sky-300 bg-clip-text text-transparent mt-2">
         Zero Commission. Pocket-Friendly.
       </p>
 
-      <!-- Mobile Character Sticker Strip (Visible on phones) -->
-      <div class="flex sm:hidden justify-center gap-2.5 mt-4">
-        <span class="sticker anim-float-1 bg-white text-slate-950 px-3 py-1 rounded-full border-2 border-emerald-400 text-xs font-black">🛵 0% CUT</span>
-        <span class="sticker anim-float-2 bg-amber-300 text-slate-950 px-3 py-1 rounded-full border-2 border-white text-xs font-black">👑 #1 QUEUE</span>
-        <span class="sticker anim-float-3 bg-slate-900 text-emerald-400 px-3 py-1 rounded-full border-2 border-emerald-400 text-xs font-black">💸 ₹7/KM</span>
+      <!-- Mobile Stickers Strip -->
+      <div class="flex sm:hidden justify-center gap-2 mt-4">
+        <span class="sticker anim-a bg-white text-slate-950 px-3 py-1 rounded-full border-2 border-emerald-400 text-xs font-black">0% CUT</span>
+        <span class="sticker anim-b bg-amber-300 text-slate-950 px-3 py-1 rounded-full border-2 border-white text-xs font-black">#1 QUEUE</span>
+        <span class="sticker anim-c bg-slate-900 text-emerald-300 px-3 py-1 rounded-full border-2 border-emerald-400 text-xs font-black">₹7/KM</span>
       </div>
     </div>
 
-    <!-- Compact Visual Stat Pills -->
-    <div class="flex flex-wrap justify-center gap-3 max-w-xl mx-auto mt-2 mb-8">
-      <div class="glass px-4 py-2 rounded-2xl flex items-center gap-2">
-        <span class="text-lg">💰</span>
-        <span class="text-xs font-black text-emerald-400">0% FEE</span>
-      </div>
-      <div class="glass px-4 py-2 rounded-2xl flex items-center gap-2">
-        <span class="text-lg">⚡</span>
-        <span class="text-xs font-black text-white">₹7/KM</span>
-      </div>
-      <div class="glass px-4 py-2 rounded-2xl flex items-center gap-2">
-        <span class="text-lg">🏆</span>
-        <span class="text-xs font-black text-amber-300" id="live-rider-counter">JOIN EARLY</span>
-      </div>
-    </div>
+    <!-- Two 4D Cards: I'm Rider & I'm Customer (No 1./2.) -->
+    <div class="stage-4d grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl w-full mx-auto mt-6 px-2">
 
-    <!-- Two 4D Animated Action Cards -->
-    <div class="stage-4d grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl w-full mx-auto px-2">
-      <!-- 1. I'm Rider -->
+      <!-- I'm Rider Card -->
       <div onclick="showView('rider-auth')" onmousemove="tilt4D(event, this)" onmouseleave="reset4D(this)"
-           class="btn-4d btn-4d-rider rounded-3xl p-7 text-left select-none relative">
-        <span class="absolute top-4 right-4 px-3 py-1 rounded-full bg-slate-950/85 text-emerald-300 text-[10px] font-black uppercase">
-          🔥 OPEN NOW
+           class="btn-4d card-rider rounded-3xl p-7 text-left select-none relative">
+        <span class="absolute top-4 right-4 px-3 py-1 rounded-full bg-slate-950 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
+          JOIN NOW
         </span>
-        <div class="text-4xl mb-3">🏍️</div>
-        <h2 class="text-3xl font-black text-white">1. I'm Rider</h2>
-        <p class="text-emerald-100 text-xs font-bold mt-1">Lock #1 Queue Spot • Keep 100% Fare</p>
+        <!-- Rider Helmet & Speed Icon -->
+        <svg class="w-12 h-12 mb-3" viewBox="0 0 56 56" fill="none">
+          <rect width="56" height="56" rx="16" fill="rgba(255,255,255,0.2)"/>
+          <path d="M14 31C14 22.7157 20.7157 16 29 16C37.2843 16 44 22.7157 44 31V35H14V31Z" fill="#FFFFFF"/>
+          <path d="M31 25H44V30H31V25Z" fill="#064E3B"/>
+          <path d="M8 38H44" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round"/>
+          <path d="M11 43H36" stroke="#A7F3D0" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <h2 class="text-3xl font-black text-white tracking-tight">I'm Rider</h2>
+        <p class="text-slate-950 font-black text-xs mt-1.5 inline-block bg-emerald-200/95 px-2.5 py-0.5 rounded-lg">
+          100% EARNINGS • ₹7/KM • PRIORITY QUEUE
+        </p>
       </div>
 
-      <!-- 2. I'm Customer -->
+      <!-- I'm Customer Card -->
       <div onclick="showView('customer-soon')" onmousemove="tilt4D(event, this)" onmouseleave="reset4D(this)"
-           class="btn-4d btn-4d-customer rounded-3xl p-7 text-left select-none relative">
+           class="btn-4d card-customer rounded-3xl p-7 text-left select-none relative">
         <span class="absolute top-4 right-4 px-3 py-1 rounded-full bg-amber-300 text-slate-950 text-[10px] font-black uppercase animate-pulse">
-          🚀 LIVE SOON
+          LIVE SOON
         </span>
-        <div class="text-4xl mb-3">📍</div>
-        <h2 class="text-3xl font-black text-white">2. I'm Customer</h2>
-        <p class="text-blue-300 text-xs font-bold mt-1">Bookings Opening Soon • Tap for VIP Alert</p>
+        <!-- Map Route Pin Icon -->
+        <svg class="w-12 h-12 mb-3" viewBox="0 0 56 56" fill="none">
+          <rect width="56" height="56" rx="16" fill="rgba(56,189,248,0.16)"/>
+          <path d="M28 11C20.8203 11 15 16.8203 15 24C15 33.75 28 45 28 45C28 45 41 33.75 41 24C41 16.8203 35.1797 11 28 11Z" fill="#38BDF8" fill-opacity="0.3" stroke="#38BDF8" stroke-width="3"/>
+          <circle cx="28" cy="24" r="5.5" fill="#FBBF24"/>
+        </svg>
+        <h2 class="text-3xl font-black text-white tracking-tight">I'm Customer</h2>
+        <p class="text-sky-300 font-extrabold text-xs mt-1.5">
+          LAUNCHING SOON • ₹7/KM FLAT • VIP ALERT
+        </p>
       </div>
+
     </div>
   </main>
 
@@ -602,15 +661,14 @@ app.get('*', (req, res) => {
   ========================================================== -->
   <section id="view-rider-auth" class="hidden relative z-10 max-w-xl w-full mx-auto px-4 py-6 flex-1">
     <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl border border-emerald-500/30 relative">
-      <!-- Floating Sticker Accent -->
-      <div class="sticker anim-float-2 hidden sm:flex items-center gap-1 absolute -top-4 -right-3 bg-amber-300 text-slate-950 px-3 py-1 rounded-full border-2 border-white text-xs font-black rotate-6">
-        👑 EARLY = TOP RANK
+      <div class="sticker anim-b hidden sm:flex items-center gap-1.5 absolute -top-4 -right-3 bg-amber-300 text-slate-950 px-3 py-1 rounded-full border-2 border-white text-xs font-black rotate-6">
+        <span>👑</span> EARLY = TOP RANK
       </div>
 
       <div class="flex justify-between items-center mb-5">
-        <h2 class="text-2xl font-black text-emerald-400">🏍️ Rider Join</h2>
+        <h2 class="text-2xl font-black text-emerald-400">Rider Access</h2>
         <div class="flex bg-slate-900 p-1 rounded-xl border border-slate-800">
-          <button id="tab-rider-reg" onclick="switchRiderTab('register')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950">New</button>
+          <button id="tab-rider-reg" onclick="switchRiderTab('register')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950">New Rider</button>
           <button id="tab-rider-log" onclick="switchRiderTab('login')" class="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400">Login</button>
         </div>
       </div>
@@ -625,35 +683,35 @@ app.get('*', (req, res) => {
         <div id="rider-vehicle-fields" class="space-y-3.5">
           <div class="grid grid-cols-2 gap-3">
             <select id="r-vtype" class="w-full bg-slate-900/90 border border-slate-700 rounded-xl px-3 py-3 text-sm text-white outline-none">
-              <option value="Bike">🏍️ Bike</option>
-              <option value="Scooter">🛵 Scooter</option>
-              <option value="Auto">🛺 Auto</option>
-              <option value="Cab">🚗 Car / Cab</option>
+              <option value="Bike">Bike</option>
+              <option value="Scooter">Scooter</option>
+              <option value="Auto">Auto</option>
+              <option value="Cab">Car / Cab</option>
             </select>
             <input type="text" id="r-vnum" placeholder="Vehicle No (UP32...)*" class="w-full bg-slate-900/90 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white uppercase outline-none" />
           </div>
 
-          <input type="text" id="r-vmodel" placeholder="Vehicle Model & Color (e.g. Honda Shine)*" class="w-full bg-slate-900/90 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white outline-none" />
+          <input type="text" id="r-vmodel" placeholder="Vehicle Model & Color *" class="w-full bg-slate-900/90 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white outline-none" />
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
-              <label class="block text-xs font-bold text-emerald-400 mb-1">🪪 Aadhaar Photo *</label>
+              <label class="block text-xs font-bold text-emerald-400 mb-1">Aadhaar Photo *</label>
               <input type="file" id="r-aadhaar" accept="image/*" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:bg-emerald-500/20 file:text-emerald-300" />
             </div>
             <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
-              <label class="block text-xs font-bold text-emerald-400 mb-1">📸 Vehicle Photo *</label>
+              <label class="block text-xs font-bold text-emerald-400 mb-1">Vehicle Photo *</label>
               <input type="file" id="r-vimg" accept="image/*" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:bg-emerald-500/20 file:text-emerald-300" />
             </div>
           </div>
 
           <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
-            <label class="block text-xs font-bold text-slate-300 mb-1">🤳 Selfie / Profile Photo (Optional)</label>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Profile Photo (Optional)</label>
             <input type="file" id="r-profile" accept="image/*" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:bg-slate-700 file:text-white" />
           </div>
         </div>
 
-        <button type="submit" id="rider-submit-btn" class="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 font-black text-slate-950 text-base shadow-lg hover:opacity-95 transition">
-          🚀 Lock My Spot & Submit
+        <button type="submit" id="rider-submit-btn" class="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-500 font-black text-slate-950 text-base shadow-lg hover:opacity-95 transition">
+          Lock Queue Spot & Submit
         </button>
       </form>
     </div>
@@ -673,11 +731,11 @@ app.get('*', (req, res) => {
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <span class="px-3 py-1 rounded-full text-xs font-black bg-amber-400 text-slate-950">
-            👑 Rank #<span id="rd-seq-top">1</span>
+          <span class="px-3 py-1 rounded-full text-xs font-black bg-amber-300 text-slate-950">
+            Queue #<span id="rd-seq-top">1</span>
           </span>
           <div id="rd-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-            ⏳ Pending
+            Pending
           </div>
         </div>
       </div>
@@ -690,32 +748,31 @@ app.get('*', (req, res) => {
           <div class="text-[11px] text-slate-400 mt-0.5"><span id="stat-daily-rides">0</span> Rides • <span id="stat-daily-km">0</span>km</div>
         </div>
         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 text-center">
-          <div class="text-[11px] font-black uppercase text-blue-400">Weekly</div>
+          <div class="text-[11px] font-black uppercase text-sky-400">Weekly</div>
           <div class="text-xl sm:text-2xl font-black text-white mt-0.5">₹<span id="stat-weekly-earn">0</span></div>
           <div class="text-[11px] text-slate-400 mt-0.5"><span id="stat-weekly-rides">0</span> Rides • <span id="stat-weekly-km">0</span>km</div>
         </div>
         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 text-center">
-          <div class="text-[11px] font-black uppercase text-purple-400">Monthly</div>
+          <div class="text-[11px] font-black uppercase text-amber-300">Monthly</div>
           <div class="text-xl sm:text-2xl font-black text-white mt-0.5">₹<span id="stat-monthly-earn">0</span></div>
           <div class="text-[11px] text-slate-400 mt-0.5"><span id="stat-monthly-rides">0</span> Rides • <span id="stat-monthly-km">0</span>km</div>
         </div>
       </div>
 
       <div id="rd-pending-box" class="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 text-center">
-        <div class="text-2xl mb-1">🛡️</div>
-        <h3 class="text-base font-black text-amber-300">Docs Under Review</h3>
-        <p class="text-xs text-slate-300 mt-0.5">Queue rank reserved! Admin approval unlocks ride alerts.</p>
+        <h3 class="text-base font-black text-amber-300">Queue Position Reserved</h3>
+        <p class="text-xs text-slate-300 mt-0.5">Admin verification activates live ride alerts for launch.</p>
       </div>
 
       <div id="rd-active-box" class="hidden space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900/90 p-3.5 rounded-2xl border border-slate-800">
           <div class="flex items-center gap-2 text-xs font-bold text-emerald-400">
             <span id="socket-status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
-            <span id="socket-status-text">Ready for Launch</span>
+            <span id="socket-status-text">Dispatch Ready</span>
           </div>
           <div class="flex items-center gap-2">
             <button onclick="unlockAndTestSound()" class="px-3 py-1.5 rounded-xl font-bold text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30">
-              🔊 Test Siren
+              Test Ringtone
             </button>
             <button id="rd-online-btn" onclick="toggleRiderOnline()" class="px-3.5 py-1.5 rounded-xl font-bold text-xs bg-emerald-500 text-slate-950">
               ● ONLINE
@@ -723,27 +780,26 @@ app.get('*', (req, res) => {
           </div>
         </div>
 
-        <!-- Active Ride Card -->
         <div id="rd-accepted-card" class="hidden bg-emerald-950/60 border-2 border-emerald-400 rounded-2xl p-5 space-y-3">
           <div class="flex justify-between items-center">
-            <span class="text-xs font-black uppercase text-emerald-400">🚀 Ride Active</span>
+            <span class="text-xs font-black uppercase text-emerald-400">Active Ride</span>
             <span id="rd-ride-fare" class="text-2xl font-black text-white">₹0</span>
           </div>
           <div class="bg-slate-950/70 p-3.5 rounded-xl">
             <p class="text-base font-black text-white" id="rd-cust-name">-</p>
-            <a id="rd-cust-phone" href="#" class="text-emerald-400 font-bold text-sm underline">📞 -</a>
+            <a id="rd-cust-phone" href="#" class="text-emerald-400 font-bold text-sm underline">-</a>
           </div>
           <div class="text-xs space-y-1 text-slate-300">
             <p><strong class="text-emerald-400">From:</strong> <span id="rd-cust-pickup"></span></p>
-            <p><strong class="text-blue-400">To:</strong> <span id="rd-cust-drop"></span></p>
-            <p id="rd-gps-drop-dist" class="text-amber-300 font-bold pt-1">📍 GPS Tracking...</p>
+            <p><strong class="text-sky-400">To:</strong> <span id="rd-cust-drop"></span></p>
+            <p id="rd-gps-drop-dist" class="text-amber-300 font-bold pt-1">GPS Drop Monitor Active</p>
           </div>
           <div class="grid grid-cols-2 gap-3">
-            <a id="rd-gmaps-nav" target="_blank" href="#" class="text-center py-3 rounded-xl bg-blue-600 font-bold text-xs text-white">
-              🗺️ Navigate
+            <a id="rd-gmaps-nav" target="_blank" href="#" class="text-center py-3 rounded-xl bg-sky-600 font-bold text-xs text-white">
+              Open Map Route
             </a>
             <button onclick="triggerRideCompletion()" class="py-3 rounded-xl bg-emerald-500 text-slate-950 font-black text-xs">
-              ✓ Complete Ride
+              Complete Ride
             </button>
           </div>
         </div>
@@ -752,37 +808,37 @@ app.get('*', (req, res) => {
   </section>
 
   <!-- =========================================================
-       VIEW 4: CUSTOMER — LIVE SOON (VISUAL & PUNCHY)
+       VIEW 4: CUSTOMER — LIVE SOON VIP ALERT
   ========================================================== -->
   <section id="view-customer-soon" class="hidden relative z-10 max-w-md w-full mx-auto px-4 py-8 flex-1 flex flex-col justify-center">
-    <div class="glass rounded-3xl p-7 shadow-2xl border border-blue-500/30 text-center space-y-5 relative">
-      <!-- Floating Character Sticker -->
-      <div class="sticker anim-float-2 inline-block bg-amber-300 text-slate-950 px-4 py-1.5 rounded-full border-2 border-white text-xs font-black rotate-[-4deg]">
-        🚀 LAUNCHING SOON
+    <div class="glass rounded-3xl p-7 shadow-2xl border border-sky-400/40 text-center space-y-5 relative">
+      <div class="sticker anim-b inline-block bg-amber-300 text-slate-950 px-4 py-1.5 rounded-full border-2 border-white text-xs font-black rotate-[-4deg]">
+        LIVE SOON • ₹7/KM
       </div>
 
-      <div class="text-6xl">🛵💨</div>
+      <!-- Concept Map Radar SVG -->
+      <svg class="w-20 h-20 mx-auto" viewBox="0 0 80 80" fill="none">
+        <circle cx="40" cy="40" r="34" stroke="#38BDF8" stroke-opacity="0.25" stroke-width="3" stroke-dasharray="6 6"/>
+        <circle cx="40" cy="40" r="21" stroke="#34D399" stroke-opacity="0.45" stroke-width="3"/>
+        <path d="M40 16C31.7157 16 25 22.7157 25 31C25 42.25 40 55 40 55C40 55 55 42.25 55 31C55 22.7157 48.2843 16 40 16Z" fill="#38BDF8" fill-opacity="0.25" stroke="#38BDF8" stroke-width="3"/>
+        <circle cx="40" cy="31" r="6" fill="#FBBF24"/>
+      </svg>
 
       <h2 class="text-3xl font-black text-white leading-tight">
-        Rides Opening <span class="text-blue-400">Very Soon!</span>
+        Customer Rides <span class="text-sky-400">Live Soon</span>
       </h2>
 
-      <div class="flex justify-center gap-2 text-xs font-black">
-        <span class="px-3 py-1 rounded-full bg-white/10 text-emerald-300">₹7/KM FLAT</span>
-        <span class="px-3 py-1 rounded-full bg-white/10 text-blue-300">ZERO SURGE</span>
-      </div>
-
       <form onsubmit="handleCustomerWaitlist(event)" class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 text-left space-y-3">
-        <div class="text-xs font-black text-blue-300 uppercase">🔔 VIP Launch Alert:</div>
-        <input type="text" id="cw-name" placeholder="Your Name" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none focus:border-blue-400" />
-        <input type="tel" id="cw-mobile" maxlength="10" placeholder="10-Digit Mobile" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none focus:border-blue-400" />
-        <button type="submit" id="cw-btn" class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 font-black text-sm text-white transition">
-          Notify Me First
+        <div class="text-xs font-black text-sky-300 uppercase">Get Launch Notification:</div>
+        <input type="text" id="cw-name" placeholder="Your Name" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none focus:border-sky-400" />
+        <input type="tel" id="cw-mobile" maxlength="10" placeholder="10-Digit Mobile" required class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none focus:border-sky-400" />
+        <button type="submit" id="cw-btn" class="w-full py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-sm transition">
+          Notify Me When Live
         </button>
       </form>
 
       <button onclick="showView('rider-auth')" class="w-full py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shadow-lg">
-        🏍️ Own a Vehicle? Join as Rider Now →
+        Join as Rider Now (0% Commission)
       </button>
     </div>
   </section>
@@ -790,14 +846,14 @@ app.get('*', (req, res) => {
   <!-- LOUD RIDER RING MODAL -->
   <div id="ring-modal" class="hidden fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4">
     <div class="glass border-2 border-emerald-400 rounded-3xl max-w-md w-full p-6 text-center ring-pulse">
-      <div class="text-xs font-black uppercase text-emerald-400">🚨 New Ride!</div>
+      <div class="text-xs font-black uppercase text-emerald-400">Incoming Ride Request</div>
       <div class="text-4xl font-black text-white my-2" id="ring-fare">₹0</div>
       <div class="text-xs font-bold text-slate-300 mb-4" id="ring-dist">0 km • 0% Commission</div>
       <div class="bg-slate-900/90 rounded-2xl p-4 text-left text-xs space-y-2 mb-4 border border-slate-800">
         <div><span class="text-emerald-400 font-bold">PICKUP:</span> <span id="ring-pickup" class="text-white"></span></div>
-        <div class="border-t border-slate-800 pt-2"><span class="text-blue-400 font-bold">DROP:</span> <span id="ring-drop" class="text-white"></span></div>
+        <div class="border-t border-slate-800 pt-2"><span class="text-sky-400 font-bold">DROP:</span> <span id="ring-drop" class="text-white"></span></div>
       </div>
-      <div class="text-sm font-black text-amber-400 mb-4">Next rider in <span id="ring-timer">20</span>s</div>
+      <div class="text-sm font-black text-amber-400 mb-4">Passing to next rider in <span id="ring-timer">20</span>s</div>
       <button onclick="acceptIncomingRide()" class="w-full py-4 rounded-2xl bg-emerald-500 text-slate-950 font-black text-lg">
         ACCEPT RIDE
       </button>
@@ -807,13 +863,16 @@ app.get('*', (req, res) => {
   <!-- RIDE COMPLETION POP-UP -->
   <div id="complete-modal" class="hidden fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
     <div class="glass border-2 border-emerald-400 rounded-3xl max-w-md w-full p-6 text-center space-y-4">
-      <div class="text-5xl">🎉</div>
-      <h3 class="text-2xl font-black text-white">Ride Completed!</h3>
+      <svg class="w-16 h-16 mx-auto" viewBox="0 0 64 64" fill="none">
+        <circle cx="32" cy="32" r="28" fill="#10B981" fill-opacity="0.2" stroke="#34D399" stroke-width="3.5"/>
+        <path d="M20 33L28 41L44 24" stroke="#34D399" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h3 class="text-2xl font-black text-white">Ride Completed</h3>
       <div class="bg-slate-900/90 rounded-2xl p-4 text-left text-xs space-y-2 border border-slate-800">
         <div class="flex justify-between"><span class="text-slate-400">Distance:</span><strong class="text-white" id="cmp-dist">0 km</strong></div>
-        <div class="flex justify-between"><span class="text-slate-400">Earned (₹7/km):</span><strong class="text-emerald-400 text-base" id="cmp-fare">₹0/-</strong></div>
+        <div class="flex justify-between"><span class="text-slate-400">Total Fare (₹7/km):</span><strong class="text-emerald-400 text-base" id="cmp-fare">₹0/-</strong></div>
         <div class="text-slate-400 truncate"><span class="text-emerald-400 font-bold">From:</span> <span id="cmp-pickup" class="text-white"></span></div>
-        <div class="text-slate-400 truncate"><span class="text-blue-400 font-bold">To:</span> <span id="cmp-drop" class="text-white"></span></div>
+        <div class="text-slate-400 truncate"><span class="text-sky-400 font-bold">To:</span> <span id="cmp-drop" class="text-white"></span></div>
       </div>
       <button onclick="closeCompletionModal()" class="w-full py-3.5 rounded-2xl bg-emerald-500 text-slate-950 font-black text-base">
         Done
@@ -825,7 +884,7 @@ app.get('*', (req, res) => {
   <section id="view-admin" class="hidden relative z-10 max-w-5xl w-full mx-auto px-4 py-8 flex-1">
     <div class="glass rounded-3xl p-6">
       <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-        <h2 class="text-xl font-black text-white">🛡️ Admin Verification</h2>
+        <h2 class="text-xl font-black text-white">Admin Verification</h2>
         <div class="flex gap-2">
           <input type="password" id="admin-pass-input" placeholder="Password" class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white" />
           <button onclick="loadAdminData()" class="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs">Unlock</button>
@@ -835,9 +894,9 @@ app.get('*', (req, res) => {
     </div>
   </section>
 
-  <!-- FOOTER -->
+  <!-- Footer -->
   <footer class="relative z-10 max-w-6xl w-full mx-auto px-4 py-4 text-center border-t border-slate-800/80 text-xs text-slate-400">
-    Go<sup class="text-emerald-400">2</sup>Go • <strong class="text-white">Co-Powered by CareerBoot</strong>
+    Go<sup class="text-emerald-400">2</sup>Go • <strong class="text-amber-300">Co-Powered by CareerBoot</strong>
   </footer>
 
   <script>
@@ -960,7 +1019,7 @@ app.get('*', (req, res) => {
       const isReg = mode === 'register';
       document.getElementById('rider-reg-fields').classList.toggle('hidden', !isReg);
       document.getElementById('rider-vehicle-fields').classList.toggle('hidden', !isReg);
-      document.getElementById('rider-submit-btn').innerText = isReg ? '🚀 Lock My Spot & Submit' : 'Login';
+      document.getElementById('rider-submit-btn').innerText = isReg ? 'Lock Queue Spot & Submit' : 'Login';
       document.getElementById('tab-rider-reg').className = isReg ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950' : 'px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400';
       document.getElementById('tab-rider-log').className = !isReg ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950' : 'px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400';
     }
@@ -994,7 +1053,7 @@ app.get('*', (req, res) => {
         renderRiderDashboard(data.queuePosition);
         showView('rider-dash');
       } catch (err) { alert(err.message); }
-      finally { btn.disabled = false; btn.innerText = riderAuthMode === 'register' ? '🚀 Lock My Spot & Submit' : 'Login'; }
+      finally { btn.disabled = false; btn.innerText = riderAuthMode === 'register' ? 'Lock Queue Spot & Submit' : 'Login'; }
     }
 
     function applyStatsToUI(stats) {
@@ -1029,13 +1088,13 @@ app.get('*', (req, res) => {
 
       const badge = document.getElementById('rd-badge');
       if (currentRider.status === 'approved') {
-        badge.innerText = '✓ Verified';
+        badge.innerText = 'Verified';
         badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
         document.getElementById('rd-pending-box').classList.add('hidden');
         document.getElementById('rd-active-box').classList.remove('hidden');
         startRiderHeartbeat();
       } else if (currentRider.status === 'rejected') {
-        badge.innerText = '✕ Rejected';
+        badge.innerText = 'Rejected';
         badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-red-500/20 text-red-300 border border-red-500/30';
       }
     }
@@ -1128,7 +1187,7 @@ app.get('*', (req, res) => {
       gpsWatchId = navigator.geolocation.watchPosition((pos) => {
         const distMeters = getDistanceMeters(pos.coords.latitude, pos.coords.longitude, rideDetails.dropCoords.lat, rideDetails.dropCoords.lng);
         const distEl = document.getElementById('rd-gps-drop-dist');
-        if (distEl) distEl.innerText = \`📍 Drop Distance: \${Math.round(distMeters)}m\`;
+        if (distEl) distEl.innerText = \`Drop Distance: \${Math.round(distMeters)}m\`;
         if (distMeters <= 150 && currentAcceptedRide) {
           navigator.geolocation.clearWatch(gpsWatchId);
           gpsWatchId = null;
@@ -1150,7 +1209,7 @@ app.get('*', (req, res) => {
       document.getElementById('rd-ride-fare').innerText = '₹' + details.fare;
       document.getElementById('rd-cust-name').innerText = details.customerName;
       const phoneEl = document.getElementById('rd-cust-phone');
-      phoneEl.innerText = '📞 ' + details.customerMobile;
+      phoneEl.innerText = details.customerMobile;
       phoneEl.href = 'tel:' + details.customerMobile;
       document.getElementById('rd-cust-pickup').innerText = details.pickupAddress;
       document.getElementById('rd-cust-drop').innerText = details.dropAddress;
@@ -1187,9 +1246,9 @@ app.get('*', (req, res) => {
         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3">
           <div class="flex justify-between items-start">
             <div>
-              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300">#\${idx + 1}</span>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300">Queue #\${idx + 1}</span>
               <h3 class="text-lg font-black text-white mt-1">\${r.name}</h3>
-              <p class="text-xs text-slate-400">📞 \${r.mobile} • \${r.vehicleType} (\${r.vehicleNumber})</p>
+              <p class="text-xs text-slate-400">\${r.mobile} • \${r.vehicleType} (\${r.vehicleNumber})</p>
             </div>
             <span class="text-xs font-bold px-2.5 py-1 rounded-full \${r.status === 'approved' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-300'}">
               \${r.status.toUpperCase()}
@@ -1224,5 +1283,5 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 Go²Go Server running on port ${PORT}`);
+  console.log(\`🚀 Go²Go Server running on port \${PORT}\`);
 });
