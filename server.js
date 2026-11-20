@@ -403,7 +403,6 @@ app.get('*', (req, res) => {
       overflow-x: hidden;
     }
 
-    /* Subtle Street-Grid Backdrop for Ride Concept */
     .road-grid {
       position: fixed;
       inset: 0;
@@ -415,7 +414,6 @@ app.get('*', (req, res) => {
       z-index: 0;
     }
 
-    /* Promo Marquee Strip */
     .marquee-wrap {
       overflow: hidden;
       white-space: nowrap;
@@ -436,7 +434,6 @@ app.get('*', (req, res) => {
       100% { transform: translateX(-50%); }
     }
 
-    /* Die-Cut Concept Stickers */
     .sticker {
       filter: drop-shadow(0 14px 20px rgba(0,0,0,0.65));
       user-select: none;
@@ -463,7 +460,6 @@ app.get('*', (req, res) => {
     .anim-b { animation: floatB 4.6s ease-in-out infinite; }
     .anim-c { animation: floatC 3.5s ease-in-out infinite; }
 
-    /* 4D Cards */
     .stage-4d { perspective: 1200px; }
     .btn-4d {
       position: relative;
@@ -506,7 +502,6 @@ app.get('*', (req, res) => {
 <body class="relative flex flex-col min-h-screen">
   <div class="road-grid"></div>
 
-  <!-- Top Advertising Ticker -->
   <div class="marquee-wrap relative z-30">
     <div class="marquee-track">
       &nbsp;&nbsp;ZERO COMMISSION FOREVER • 100% RIDER EARNINGS • ₹7/KM FLAT • FIRST JOINED = #1 PRIORITY QUEUE • CO-POWERED BY CAREERBOOT • CUSTOMER RIDES DROPPING SOON &nbsp;&nbsp;&nbsp;&nbsp;
@@ -514,10 +509,8 @@ app.get('*', (req, res) => {
     </div>
   </div>
 
-  <!-- Header -->
   <nav class="relative z-20 max-w-6xl w-full mx-auto px-4 py-3.5 flex justify-between items-center">
     <div onclick="showView('landing')" class="flex items-center gap-2.5 cursor-pointer">
-      <!-- Brand Route Bolt SVG -->
       <svg class="w-10 h-10 shrink-0" viewBox="0 0 48 48" fill="none">
         <rect width="48" height="48" rx="14" fill="url(#brandGrad)"/>
         <path d="M26.5 10L15 26H24L21.5 38L33 22H24L26.5 10Z" fill="#020617"/>
@@ -538,14 +531,9 @@ app.get('*', (req, res) => {
     </button>
   </nav>
 
-  <!-- =========================================================
-       VIEW 1: CONCEPT STICKER LANDING PAGE
-  ========================================================== -->
+  <!-- VIEW 1: CONCEPT STICKER LANDING PAGE -->
   <main id="view-landing" class="relative z-10 max-w-5xl w-full mx-auto px-4 pt-3 pb-14 text-center flex-1 flex flex-col justify-center">
-
     <div class="relative max-w-3xl w-full mx-auto py-6">
-
-      <!-- STICKER 1 (Top Left): Concept Scooter & Route Pin Sticker -->
       <div class="sticker anim-a hidden sm:flex items-center gap-2 absolute -left-8 -top-3 bg-white text-slate-950 px-3.5 py-2 rounded-3xl border-4 border-emerald-400 rotate-[-7deg] z-20">
         <svg class="w-9 h-9" viewBox="0 0 48 48" fill="none">
           <circle cx="14" cy="34" r="7" stroke="#0F172A" stroke-width="3.5" fill="#E2E8F0"/>
@@ -560,7 +548,6 @@ app.get('*', (req, res) => {
         </div>
       </div>
 
-      <!-- STICKER 2 (Top Right): #1 Queue Podium Crown Sticker -->
       <div class="sticker anim-b hidden sm:flex items-center gap-2 absolute -right-7 -top-2 bg-amber-300 text-slate-950 px-3.5 py-2 rounded-3xl border-4 border-white rotate-[8deg] z-20">
         <svg class="w-9 h-9" viewBox="0 0 48 48" fill="none">
           <path d="M9 35L7 16L18 24L24 12L30 24L41 16L39 35H9Z" fill="#F59E0B" stroke="#0F172A" stroke-width="3" stroke-linejoin="round"/>
@@ -572,7 +559,6 @@ app.get('*', (req, res) => {
         </div>
       </div>
 
-      <!-- STICKER 3 (Bottom Left): ₹7/km Fare Meter Sticker -->
       <div class="sticker anim-c hidden md:flex items-center gap-2 absolute -left-5 bottom-1 bg-slate-900 text-white px-3.5 py-2 rounded-full border-2 border-emerald-400 rotate-[-5deg] z-20">
         <svg class="w-6 h-6" viewBox="0 0 32 32" fill="none">
           <circle cx="16" cy="16" r="13" fill="#10B981" fill-opacity="0.2" stroke="#34D399" stroke-width="2.5"/>
@@ -581,7 +567,6 @@ app.get('*', (req, res) => {
         <span class="text-xs font-black text-emerald-300">₹7 / KM</span>
       </div>
 
-      <!-- STICKER 4 (Bottom Right): Live Rider Squad Counter Sticker -->
       <div class="sticker anim-a hidden md:flex items-center gap-2 absolute -right-5 bottom-1 bg-slate-900 text-white px-3.5 py-2 rounded-full border-2 border-sky-400 rotate-[6deg] z-20">
         <svg class="w-6 h-6" viewBox="0 0 32 32" fill="none">
           <path d="M16 4C11.03 4 7 8.03 7 13C7 19.75 16 28 16 28C16 28 25 19.75 25 13C25 8.03 20.97 4 16 4Z" fill="#38BDF8" fill-opacity="0.25" stroke="#38BDF8" stroke-width="2.5"/>
@@ -590,7 +575,6 @@ app.get('*', (req, res) => {
         <span class="text-xs font-black text-sky-300" id="live-rider-counter">RIDER DRIVE</span>
       </div>
 
-      <!-- Campaign Pill -->
       <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-xs font-black text-emerald-300 mb-2">
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
         RIDER ONBOARDING • ZERO COMMISSION
@@ -604,7 +588,6 @@ app.get('*', (req, res) => {
         Zero Commission. Pocket-Friendly.
       </p>
 
-      <!-- Mobile Stickers Strip -->
       <div class="flex sm:hidden justify-center gap-2 mt-4">
         <span class="sticker anim-a bg-white text-slate-950 px-3 py-1 rounded-full border-2 border-emerald-400 text-xs font-black">0% CUT</span>
         <span class="sticker anim-b bg-amber-300 text-slate-950 px-3 py-1 rounded-full border-2 border-white text-xs font-black">#1 QUEUE</span>
@@ -612,16 +595,12 @@ app.get('*', (req, res) => {
       </div>
     </div>
 
-    <!-- Two 4D Cards: I'm Rider & I'm Customer (No 1./2.) -->
     <div class="stage-4d grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl w-full mx-auto mt-6 px-2">
-
-      <!-- I'm Rider Card -->
       <div onclick="showView('rider-auth')" onmousemove="tilt4D(event, this)" onmouseleave="reset4D(this)"
            class="btn-4d card-rider rounded-3xl p-7 text-left select-none relative">
         <span class="absolute top-4 right-4 px-3 py-1 rounded-full bg-slate-950 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
           JOIN NOW
         </span>
-        <!-- Rider Helmet & Speed Icon -->
         <svg class="w-12 h-12 mb-3" viewBox="0 0 56 56" fill="none">
           <rect width="56" height="56" rx="16" fill="rgba(255,255,255,0.2)"/>
           <path d="M14 31C14 22.7157 20.7157 16 29 16C37.2843 16 44 22.7157 44 31V35H14V31Z" fill="#FFFFFF"/>
@@ -635,13 +614,11 @@ app.get('*', (req, res) => {
         </p>
       </div>
 
-      <!-- I'm Customer Card -->
       <div onclick="showView('customer-soon')" onmousemove="tilt4D(event, this)" onmouseleave="reset4D(this)"
            class="btn-4d card-customer rounded-3xl p-7 text-left select-none relative">
         <span class="absolute top-4 right-4 px-3 py-1 rounded-full bg-amber-300 text-slate-950 text-[10px] font-black uppercase animate-pulse">
           LIVE SOON
         </span>
-        <!-- Map Route Pin Icon -->
         <svg class="w-12 h-12 mb-3" viewBox="0 0 56 56" fill="none">
           <rect width="56" height="56" rx="16" fill="rgba(56,189,248,0.16)"/>
           <path d="M28 11C20.8203 11 15 16.8203 15 24C15 33.75 28 45 28 45C28 45 41 33.75 41 24C41 16.8203 35.1797 11 28 11Z" fill="#38BDF8" fill-opacity="0.3" stroke="#38BDF8" stroke-width="3"/>
@@ -652,13 +629,10 @@ app.get('*', (req, res) => {
           LAUNCHING SOON • ₹7/KM FLAT • VIP ALERT
         </p>
       </div>
-
     </div>
   </main>
 
-  <!-- =========================================================
-       VIEW 2: RIDER REGISTRATION & LOGIN
-  ========================================================== -->
+  <!-- VIEW 2: RIDER REGISTRATION & LOGIN -->
   <section id="view-rider-auth" class="hidden relative z-10 max-w-xl w-full mx-auto px-4 py-6 flex-1">
     <div class="glass rounded-3xl p-6 sm:p-8 shadow-2xl border border-emerald-500/30 relative">
       <div class="sticker anim-b hidden sm:flex items-center gap-1.5 absolute -top-4 -right-3 bg-amber-300 text-slate-950 px-3 py-1 rounded-full border-2 border-white text-xs font-black rotate-6">
@@ -717,9 +691,7 @@ app.get('*', (req, res) => {
     </div>
   </section>
 
-  <!-- =========================================================
-       VIEW 3: RIDER DASHBOARD
-  ========================================================== -->
+  <!-- VIEW 3: RIDER DASHBOARD -->
   <section id="view-rider-dash" class="hidden relative z-10 max-w-3xl w-full mx-auto px-4 py-6 flex-1">
     <div class="glass rounded-3xl p-6 shadow-2xl space-y-5">
       <div class="flex flex-wrap justify-between items-center gap-4 border-b border-slate-800 pb-4">
@@ -740,7 +712,6 @@ app.get('*', (req, res) => {
         </div>
       </div>
 
-      <!-- Daily / Weekly / Monthly Earnings Grid -->
       <div class="grid grid-cols-3 gap-3">
         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 text-center">
           <div class="text-[11px] font-black uppercase text-emerald-400">Daily</div>
@@ -807,16 +778,13 @@ app.get('*', (req, res) => {
     </div>
   </section>
 
-  <!-- =========================================================
-       VIEW 4: CUSTOMER — LIVE SOON VIP ALERT
-  ========================================================== -->
+  <!-- VIEW 4: CUSTOMER — LIVE SOON VIP ALERT -->
   <section id="view-customer-soon" class="hidden relative z-10 max-w-md w-full mx-auto px-4 py-8 flex-1 flex flex-col justify-center">
     <div class="glass rounded-3xl p-7 shadow-2xl border border-sky-400/40 text-center space-y-5 relative">
       <div class="sticker anim-b inline-block bg-amber-300 text-slate-950 px-4 py-1.5 rounded-full border-2 border-white text-xs font-black rotate-[-4deg]">
         LIVE SOON • ₹7/KM
       </div>
 
-      <!-- Concept Map Radar SVG -->
       <svg class="w-20 h-20 mx-auto" viewBox="0 0 80 80" fill="none">
         <circle cx="40" cy="40" r="34" stroke="#38BDF8" stroke-opacity="0.25" stroke-width="3" stroke-dasharray="6 6"/>
         <circle cx="40" cy="40" r="21" stroke="#34D399" stroke-opacity="0.45" stroke-width="3"/>
@@ -894,7 +862,6 @@ app.get('*', (req, res) => {
     </div>
   </section>
 
-  <!-- Footer -->
   <footer class="relative z-10 max-w-6xl w-full mx-auto px-4 py-4 text-center border-t border-slate-800/80 text-xs text-slate-400">
     Go<sup class="text-emerald-400">2</sup>Go • <strong class="text-amber-300">Co-Powered by CareerBoot</strong>
   </footer>
@@ -1231,7 +1198,6 @@ app.get('*', (req, res) => {
     function closeCompletionModal() { document.getElementById('complete-modal').classList.add('hidden'); }
     socket.on('accept_failed', ({ message }) => alert(message));
 
-    // ADMIN
     async function loadAdminData() {
       const password = document.getElementById('admin-pass-input').value;
       socket.emit('join_admin_room', password);
@@ -1283,5 +1249,5 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(\`🚀 Go²Go Server running on port \${PORT}\`);
+  console.log(`🚀 Go²Go Server running on port ${PORT}`);
 });
